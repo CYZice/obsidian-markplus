@@ -1,5 +1,10 @@
 import { Plugin } from "obsidian";
-import { DEFAULT_SETTINGS } from "./constants";
+import {
+  DEFAULT_SETTINGS,
+  MARKPLUS_TABLE_COLOR_STYLE_ID,
+  MARKPLUS_TABLE_HEADER_BACKGROUND_VAR,
+  MARKPLUS_TABLE_STRIPE_ROW_BACKGROUND_VAR,
+} from "./constants";
 import { mpLog } from "./debug";
 import { MarkPlusSettingTab } from "./settings";
 import { TableColumnResizeController } from "./table-controller";
@@ -21,8 +26,17 @@ export default class MarkPlusPlugin extends Plugin {
     }
 
     this._pluginInitialized = true;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loaded = ((await this.loadData()) || {}) as Record<string, unknown>;
+    const migrated = migrateLegacyTableColorSettings(loaded);
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+    delete (this.settings as Record<string, unknown>).tableStyles;
+    delete (this.settings as Record<string, unknown>).tableStripeRowBackground;
+    delete (this.settings as Record<string, unknown>).tableHeaderBackground;
     this.tableEnhancer = new TableColumnResizeController(this as never);
+    if (migrated) {
+      await this.saveSettings();
+    }
+    this.applyTableStyleVariables();
 
     this.addSettingTab(new MarkPlusSettingTab(this.app, this));
 
@@ -86,6 +100,7 @@ export default class MarkPlusPlugin extends Plugin {
     );
 
     this.register(() => {
+      document.getElementById(MARKPLUS_TABLE_COLOR_STYLE_ID)?.remove();
       this.tableEnhancer?.destroy();
     });
 
@@ -94,11 +109,92 @@ export default class MarkPlusPlugin extends Plugin {
 
   onunload(): void {
     this._pluginInitialized = false;
+    document.getElementById(MARKPLUS_TABLE_COLOR_STYLE_ID)?.remove();
     this.tableEnhancer?.destroy();
     this.tableEnhancer = null;
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  applyTableStyleVariables(): void {
+    let styleEl = document.getElementById(MARKPLUS_TABLE_COLOR_STYLE_ID) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = MARKPLUS_TABLE_COLOR_STYLE_ID;
+      document.head.appendChild(styleEl);
+    }
+
+    const rules: string[] = [];
+    appendTableColorThemeRule(
+      rules,
+      "theme-light",
+      MARKPLUS_TABLE_STRIPE_ROW_BACKGROUND_VAR,
+      this.settings.tableStripeRowBackgroundLight,
+    );
+    appendTableColorThemeRule(
+      rules,
+      "theme-dark",
+      MARKPLUS_TABLE_STRIPE_ROW_BACKGROUND_VAR,
+      this.settings.tableStripeRowBackgroundDark,
+    );
+    appendTableColorThemeRule(
+      rules,
+      "theme-light",
+      MARKPLUS_TABLE_HEADER_BACKGROUND_VAR,
+      this.settings.tableHeaderBackgroundLight,
+    );
+    appendTableColorThemeRule(
+      rules,
+      "theme-dark",
+      MARKPLUS_TABLE_HEADER_BACKGROUND_VAR,
+      this.settings.tableHeaderBackgroundDark,
+    );
+    styleEl.textContent = rules.join("\n");
+  }
+}
+
+function migrateLegacyTableColorSettings(data: Record<string, unknown>): boolean {
+  let changed = false;
+  const stripe =
+    typeof data.tableStripeRowBackground === "string" ? data.tableStripeRowBackground : "";
+  const header =
+    typeof data.tableHeaderBackground === "string" ? data.tableHeaderBackground : "";
+
+  if (stripe) {
+    if (!data.tableStripeRowBackgroundLight) {
+      data.tableStripeRowBackgroundLight = stripe;
+      changed = true;
+    }
+    if (!data.tableStripeRowBackgroundDark) {
+      data.tableStripeRowBackgroundDark = stripe;
+      changed = true;
+    }
+  }
+
+  if (header) {
+    if (!data.tableHeaderBackgroundLight) {
+      data.tableHeaderBackgroundLight = header;
+      changed = true;
+    }
+    if (!data.tableHeaderBackgroundDark) {
+      data.tableHeaderBackgroundDark = header;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function appendTableColorThemeRule(
+  rules: string[],
+  themeClass: "theme-light" | "theme-dark",
+  variableName: string,
+  value: string,
+): void {
+  const trimmed = String(value || "").trim();
+  if (trimmed) {
+    rules.push(`body.${themeClass} { ${variableName}: ${trimmed}; }`);
   }
 }

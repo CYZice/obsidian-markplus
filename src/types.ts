@@ -6,6 +6,8 @@ export type TableStyleVariant =
   | "striped-rows"
   | "horizontal-lines-striped";
 
+export type TableAlignment = "left" | "center" | "right";
+
 export interface MarkPlusSettings {
   minColumnWidth: number;
   pixelsPerDash: number;
@@ -13,6 +15,10 @@ export interface MarkPlusSettings {
   enableTableFormulas: boolean;
   enableTableCellFill: boolean;
   tableStyleVariant: TableStyleVariant;
+  tableStripeRowBackgroundLight: string;
+  tableStripeRowBackgroundDark: string;
+  tableHeaderBackgroundLight: string;
+  tableHeaderBackgroundDark: string;
 }
 
 export interface MarkdownTableColumn {
@@ -24,6 +30,7 @@ export interface MarkdownTableColumn {
 export interface MarkdownTableSpec {
   separatorLineIndex: number;
   headerLineIndex: number;
+  tableOrdinal: number;
   columns: MarkdownTableColumn[];
   headerCells: string[];
   bodyLines: string[];
@@ -46,12 +53,20 @@ export interface EditorLike {
   ): void;
   getCursor?(): EditorPosition;
   setCursor?(position: EditorPosition): void;
+  lineCount?(): number;
+  posAtDOM?(node: Node, side?: number): EditorPosition | null;
 }
 
 export type MarkdownViewLike = MarkdownView & {
   editor?: EditorLike;
   file?: TFile | null;
   contentEl: HTMLElement;
+  getMode?(): string;
+  previewMode?: {
+    containerEl?: HTMLElement;
+    rerender?(force?: boolean): void;
+    file?: TFile | null;
+  } | null;
 };
 
 export interface EditorChangeContext {
@@ -69,4 +84,5 @@ export interface MarkPlusPluginApi {
   settings: MarkPlusSettings;
   tableEnhancer: TableEnhancerLike | null;
   saveSettings(): Promise<void>;
+  applyTableStyleVariables(): void;
 }

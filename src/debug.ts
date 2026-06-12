@@ -29,6 +29,7 @@ export function summarizeMutations(records: MutationRecord[]) {
         ((node as Element).classList?.contains("markplus-colgroup") ||
           (node as Element).classList?.contains("markplus-column-handle") ||
           (node as Element).classList?.contains("markplus-table-scale-handle") ||
+          (node as Element).classList?.contains("markplus-table-menu-button") ||
           (node as Element).classList?.contains("markplus-cell-fill-handle") ||
           (node as Element).classList?.contains("markplus-formula-result") ||
           (node as Element).tagName === "COL"),

@@ -1,5 +1,14 @@
-import { HEADER_SIGNATURE_SEPARATOR } from "./constants";
-import type { MarkdownTableColumn, MarkdownTableSpec } from "./types";
+import {
+  CONTENT_SIGNATURE_SEPARATOR,
+  HEADER_SIGNATURE_SEPARATOR,
+  ROW_SIGNATURE_SEPARATOR,
+} from "./constants";
+import type {
+  MarkdownTableColumn,
+  MarkdownTableSpec,
+  MarkdownViewLike,
+  TableAlignment,
+} from "./types";
 
 export function extractMarkdownTableSpecs(markdown: string): MarkdownTableSpec[] {
   const lines = markdown.split(/\r?\n/);
@@ -32,6 +41,7 @@ export function extractMarkdownTableSpecs(markdown: string): MarkdownTableSpec[]
     specs.push({
       separatorLineIndex: lineIndex,
       headerLineIndex: lineIndex - 1,
+      tableOrdinal: specs.length,
       columns: separator.columns,
       headerCells,
       bodyLines,
@@ -53,13 +63,10 @@ export function findSeparatorLineForSpec(
     return null;
   }
 
-  const signature = specHeaderSignature(tableSpec);
-  if (signature) {
-    for (const currentSpec of extractMarkdownTableSpecs(markdown)) {
-      if (specHeaderSignature(currentSpec) === signature) {
-        return currentSpec.separatorLineIndex;
-      }
-    }
+  const specs = extractMarkdownTableSpecs(markdown);
+  const matched = matchSpecForSection(tableSpec, specs);
+  if (matched) {
+    return matched.separatorLineIndex;
   }
 
   const lines = markdown.split(/\r?\n/);
@@ -309,6 +316,273 @@ export function specHeaderSignature(tableSpec: MarkdownTableSpec | null): string
         .map((cell) => normalizeMatchText(cell))
         .join(HEADER_SIGNATURE_SEPARATOR)
     : null;
+}
+
+export function domTableBodySignature(table: HTMLTableElement): string | null {
+  return !(table instanceof HTMLTableElement) || table.rows.length < 2
+    ? null
+    : Array.from(table.rows)
+        .slice(1)
+        .map((row) =>
+          Array.from(row.cells)
+            .map((cell) => normalizeMatchText(cell.textContent))
+            .join(HEADER_SIGNATURE_SEPARATOR),
+        )
+        .join(ROW_SIGNATURE_SEPARATOR);
+}
+
+export function specBodySignature(tableSpec: MarkdownTableSpec | null): string | null {
+  return tableSpec && Array.isArray(tableSpec.bodyLines) && tableSpec.bodyLines.length
+    ? tableSpec.bodyLines
+        .map((line) =>
+          splitMarkdownRow(line)
+            .map((cell) => normalizeMatchText(cell))
+            .join(HEADER_SIGNATURE_SEPARATOR),
+        )
+        .join(ROW_SIGNATURE_SEPARATOR)
+    : null;
+}
+
+export function domTableContentSignature(table: HTMLTableElement): string | null {
+  if (!(table instanceof HTMLTableElement) || !table.rows?.length) {
+    return null;
+  }
+
+  const rows = Array.from(table.rows).map((row) =>
+    Array.from(row.cells).map((cell) => normalizeMatchText(cell.textContent)),
+  );
+  if (!rows.length || !rows[0].length) {
+    return null;
+  }
+
+  const headerSignature = rows[0].join(HEADER_SIGNATURE_SEPARATOR);
+  const previewBody = rows
+    .slice(1, 3)
+    .map((row) => row.join(HEADER_SIGNATURE_SEPARATOR))
+    .join(ROW_SIGNATURE_SEPARATOR);
+  return [rows.length, rows[0].length, headerSignature, previewBody].join(
+    CONTENT_SIGNATURE_SEPARATOR,
+  );
+}
+
+export function specContentSignature(tableSpec: MarkdownTableSpec | null): string | null {
+  if (!tableSpec?.headerCells?.length) {
+    return null;
+  }
+
+  const previewBody = Array.isArray(tableSpec.bodyLines)
+    ? tableSpec.bodyLines
+        .slice(0, 2)
+        .map((line) =>
+          splitMarkdownRow(line).map((cell) => normalizeMatchText(cell)),
+        )
+    : [];
+  return [
+    1 + (Array.isArray(tableSpec.bodyLines) ? tableSpec.bodyLines.length : 0),
+    tableSpec.headerCells.length,
+    tableSpec.headerCells.map((cell) => normalizeMatchText(cell)).join(HEADER_SIGNATURE_SEPARATOR),
+    previewBody.map((row) => row.join(HEADER_SIGNATURE_SEPARATOR)).join(ROW_SIGNATURE_SEPARATOR),
+  ].join(CONTENT_SIGNATURE_SEPARATOR);
+}
+
+export function matchSpecIndexesByBodySignature(
+  bodySignature: string | null,
+  specs: MarkdownTableSpec[],
+  usedIndexes: Set<number>,
+  indexes: number[] | null = null,
+): number[] {
+  if (!bodySignature) {
+    return [];
+  }
+  return (Array.isArray(indexes) ? indexes : specs.map((_, index) => index)).filter(
+    (index) => !usedIndexes.has(index) && specBodySignature(specs[index]) === bodySignature,
+  );
+}
+
+export function getTableMatchIndex(
+  table: Element | null | undefined,
+  fallbackIndex: number | null = null,
+): number | null {
+  const datasetIndex = Number.parseInt((table as HTMLElement | null)?.dataset?.markplusTableOrdinal ?? "", 10);
+  return Number.isInteger(datasetIndex) && datasetIndex >= 0
+    ? datasetIndex
+    : Number.isInteger(fallbackIndex) && (fallbackIndex as number) >= 0
+      ? fallbackIndex
+      : null;
+}
+
+export function getTableSourceLineForDomTable(
+  view: MarkdownViewLike | null,
+  table: HTMLTableElement,
+): number | null {
+  const editor = view?.editor;
+  if (!editor || typeof editor.posAtDOM !== "function" || !(table instanceof HTMLTableElement)) {
+    return null;
+  }
+
+  const candidates = [
+    table.closest(".cm-table-widget"),
+    table.querySelector("thead th"),
+    table.querySelector("tr th"),
+    table.querySelector("tr td"),
+    table,
+  ].filter(Boolean) as Node[];
+
+  for (const candidate of candidates) {
+    for (const side of [-1, 0, 1]) {
+      try {
+        const position = editor.posAtDOM(candidate, side);
+        if (position && Number.isInteger(position.line) && position.line >= 0) {
+          return position.line;
+        }
+      } catch (_error) {}
+    }
+  }
+
+  return null;
+}
+
+export function matchSpecForSection(
+  currentSpec: MarkdownTableSpec,
+  specs: MarkdownTableSpec[],
+): MarkdownTableSpec | null {
+  const contentSignature = specContentSignature(currentSpec);
+  if (contentSignature) {
+    const exact = specs.filter((spec) => specContentSignature(spec) === contentSignature);
+    if (exact.length === 1) {
+      return exact[0];
+    }
+  }
+
+  const bodySignature = specBodySignature(currentSpec);
+  if (bodySignature) {
+    const exact = specs.filter((spec) => specBodySignature(spec) === bodySignature);
+    if (exact.length === 1) {
+      return exact[0];
+    }
+  }
+
+  const headerSignature = specHeaderSignature(currentSpec);
+  if (headerSignature) {
+    const exact = specs.filter((spec) => specHeaderSignature(spec) === headerSignature);
+    if (exact.length === 1) {
+      return exact[0];
+    }
+  }
+
+  if (Number.isInteger(currentSpec.tableOrdinal) && specs[currentSpec.tableOrdinal]) {
+    return specs[currentSpec.tableOrdinal];
+  }
+
+  return null;
+}
+
+export function buildMarkdownTableFromSpec(tableSpec: MarkdownTableSpec | null): string {
+  return tableSpec?.rawHeaderLine && tableSpec?.rawSeparatorLine
+    ? [tableSpec.rawHeaderLine, tableSpec.rawSeparatorLine, ...(tableSpec.bodyLines || [])].join(
+        "\n",
+      )
+    : "";
+}
+
+export function buildMarkdownTableFromElement(table: HTMLTableElement): string {
+  const rows = table instanceof HTMLTableElement ? Array.from(table.rows) : [];
+  if (!rows.length) {
+    return "";
+  }
+
+  const markdownRows = rows.map(
+    (row) =>
+      `| ${Array.from(row.cells)
+        .map((cell) => (cell.textContent ?? "").trim().replace(/\|/g, "\\|"))
+        .join(" | ")} |`,
+  );
+  if (markdownRows.length === 1) {
+    markdownRows.push(`| ${Array.from(rows[0].cells, () => "---").join(" | ")} |`);
+  }
+  return markdownRows.join("\n");
+}
+
+export function getTableMarkdownForCopy(
+  view: MarkdownViewLike | null,
+  tableSpec: MarkdownTableSpec | null,
+  table: HTMLTableElement,
+): string {
+  const editor = view?.editor;
+  if (editor && tableSpec) {
+    const start = tableSpec.headerLineIndex;
+    const end = tableSpec.separatorLineIndex + (tableSpec.bodyLines?.length ?? 0);
+    if (
+      Number.isInteger(start) &&
+      start >= 0 &&
+      start <= end &&
+      (!editor.lineCount || end < editor.lineCount())
+    ) {
+      const lines: string[] = [];
+      for (let lineIndex = start; lineIndex <= end; lineIndex += 1) {
+        lines.push(editor.getLine(lineIndex));
+      }
+      if (lines.length >= 2 && parseSeparatorLine(lines[1])) {
+        return lines.join("\n");
+      }
+    }
+  }
+
+  return buildMarkdownTableFromSpec(tableSpec) || buildMarkdownTableFromElement(table);
+}
+
+export function alignmentToColumnFlags(alignment: TableAlignment): {
+  alignLeft: boolean;
+  alignRight: boolean;
+} {
+  return {
+    alignLeft: alignment !== "right",
+    alignRight: alignment !== "left",
+  };
+}
+
+export function getColumnAlignmentKind(
+  column: MarkdownTableColumn | null | undefined,
+): TableAlignment | null {
+  if (!column) {
+    return null;
+  }
+  if (column.alignLeft && column.alignRight) {
+    return "center";
+  }
+  if (column.alignRight) {
+    return "right";
+  }
+  if (column.alignLeft) {
+    return "left";
+  }
+  return null;
+}
+
+export function getTableAlignmentFromColumns(
+  columns: Array<MarkdownTableColumn | null | undefined> | null | undefined,
+): TableAlignment | null {
+  if (!Array.isArray(columns) || !columns.length) {
+    return null;
+  }
+
+  const first = getColumnAlignmentKind(columns[0]);
+  if (!first) {
+    return null;
+  }
+  return columns.every((column) => getColumnAlignmentKind(column) === first) ? first : null;
+}
+
+export function applyAlignmentToColumns(
+  columns: MarkdownTableColumn[],
+  alignment: TableAlignment,
+): MarkdownTableColumn[] {
+  const flags = alignmentToColumnFlags(alignment);
+  return columns.map((column) => ({
+    ...column,
+    alignLeft: flags.alignLeft,
+    alignRight: flags.alignRight,
+  }));
 }
 
 export function isMarkdownTableRow(line: string): boolean {

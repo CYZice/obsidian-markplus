@@ -1,0 +1,9 @@
+{
+  "id": "markplus",
+  "name": "MarkPlus",
+  "version": "0.3.5",
+  "minAppVersion": "1.5.0",
+  "description": "Markdown语法增强插件，表格、任务等原生语法、以及扩展语法增强",
+  "author": "ytmaps_鱼先生",
+  "isDesktopOnly": false
+}
