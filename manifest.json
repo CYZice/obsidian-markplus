@@ -3,7 +3,7 @@
   "name": "MarkPlus",
   "version": "0.3.3",
   "minAppVersion": "1.5.0",
-  "description": "Markdown语法增强插件，表格、任务等原生语法，以及扩展语法增强",
+  "description": "Markdown 语法增强插件，支持表格、任务等原生语法以及扩展语法增强。",
   "author": "CYZice",
   "authorUrl": "https://github.com/CYZice/obsidian-markplus",
   "isDesktopOnly": false
