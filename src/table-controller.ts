@@ -1,10 +1,4 @@
-import {
-  MarkdownView,
-  Menu,
-  Notice,
-  setIcon,
-  type TFile,
-} from "obsidian";
+import { MarkdownView, Menu, Notice, setIcon, type TFile } from "obsidian";
 import {
   DEFAULT_SETTINGS,
   MARKPLUS_COLUMN_ALIGNMENT_CLASSES,
@@ -44,10 +38,7 @@ import {
   specHeaderSignature,
   transferColumnsToCurrentLayout,
 } from "./markdown-table";
-import {
-  computeFillTargets,
-  getFillCellValue,
-} from "./cell-fill";
+import { computeFillTargets, getFillCellValue } from "./cell-fill";
 import {
   getCellCoords,
   getTableCellFromPoint,
@@ -157,9 +148,14 @@ export class TableColumnResizeController {
     this.boundFillPointerCancel = this.onFillPointerCancel.bind(this);
     this.boundDocumentPointerDown = this.onDocumentPointerDown.bind(this);
 
-    this.plugin.registerDomEvent(document, "pointerdown", this.boundDocumentPointerDown, {
-      capture: true,
-    });
+    this.plugin.registerDomEvent(
+      document,
+      "pointerdown",
+      this.boundDocumentPointerDown,
+      {
+        capture: true,
+      },
+    );
   }
 
   destroy(): void {
@@ -200,14 +196,16 @@ export class TableColumnResizeController {
   restoreSeparatorsAfterComposition(): void {
     const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
     if (view?.editor && view.file) {
-      this.handleEditorChange(view.editor, { file: view.file }).catch((error) => {
-        console.error("MarkPlus composition restore failed", error);
-      });
+      this.handleEditorChange(view.editor, { file: view.file }).catch(
+        (error) => {
+          console.error("MarkPlus composition restore failed", error);
+        },
+      );
     }
   }
 
   async refreshAllTables(): Promise<void> {
-    if (this.isComposing) {
+    if (this.isComposing || this.fillDragState) {
       return;
     }
 
@@ -223,6 +221,10 @@ export class TableColumnResizeController {
       }
 
       this.ensureObserver(view.contentEl);
+      if (typeof view.getMode === "function" && view.getMode() === "preview") {
+        continue;
+      }
+
       const markdown = await this.getMarkdownSource(view);
       const specs = extractMarkdownTableSpecs(markdown);
       this.fileTableSnapshots.set(file.path, specs);
@@ -230,8 +232,15 @@ export class TableColumnResizeController {
 
       const tables = this.queryTablesForView(view);
       const usedIndexes = new Set<number>();
+      const canUseFallbackIndex = tables.length === specs.length;
       tables.forEach((table, index) => {
-        const tableSpec = this.matchSpecForTable(table, specs, usedIndexes, index, view);
+        const tableSpec = this.matchSpecForTable(
+          table,
+          specs,
+          usedIndexes,
+          canUseFallbackIndex ? index : null,
+          view,
+        );
         this.decorateTable(table, tableSpec, view, index);
       });
 
@@ -243,14 +252,18 @@ export class TableColumnResizeController {
     if (typeof view.getMode === "function" && view.getMode() === "preview") {
       const containerEl = view.previewMode?.containerEl;
       return containerEl
-        ? Array.from(containerEl.querySelectorAll(PREVIEW_TABLE_SELECTOR)).filter(
-            (node): node is HTMLTableElement => node instanceof HTMLTableElement,
+        ? Array.from(
+            containerEl.querySelectorAll(PREVIEW_TABLE_SELECTOR),
+          ).filter(
+            (node): node is HTMLTableElement =>
+              node instanceof HTMLTableElement,
           )
         : [];
     }
 
     return Array.from(view.contentEl.querySelectorAll(TABLE_SELECTOR)).filter(
-      (node): node is HTMLTableElement => node instanceof HTMLTableElement,
+      (node): node is HTMLTableElement =>
+        node instanceof HTMLTableElement && !isReadingModeTable(node),
     );
   }
 
@@ -278,12 +291,21 @@ export class TableColumnResizeController {
           return;
         }
 
-        const rowCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+        const rowCount = Math.max(
+          ...Array.from(table.rows).map((row) => row.cells.length),
+          0,
+        );
         if (rowCount < 1) {
           return;
         }
 
-        const tableSpec = this.matchSpecForTable(table, specs, usedIndexes, index, view);
+        const tableSpec = this.matchSpecForTable(
+          table,
+          specs,
+          usedIndexes,
+          index,
+          view,
+        );
         const widths = this.getWidthsForTable(table, tableSpec, rowCount);
         this.applyColumnWidthStyles(table, widths);
         this.positionHandles(table);
@@ -292,7 +314,10 @@ export class TableColumnResizeController {
     }
   }
 
-  async handleEditorChange(editor: EditorLike | null | undefined, context?: EditorChangeContext): Promise<void> {
+  async handleEditorChange(
+    editor: EditorLike | null | undefined,
+    context?: EditorChangeContext,
+  ): Promise<void> {
     if (!editor || typeof editor.getValue !== "function") {
       return;
     }
@@ -328,17 +353,28 @@ export class TableColumnResizeController {
 
     for (const currentSpec of currentSpecs) {
       const previousSpec =
-        previousSpecs.find((item) => item.separatorLineIndex === currentSpec.separatorLineIndex) ||
-        previousSpecs.find((item) => item.tableOrdinal === currentSpec.tableOrdinal);
+        previousSpecs.find(
+          (item) => item.separatorLineIndex === currentSpec.separatorLineIndex,
+        ) ||
+        previousSpecs.find(
+          (item) => item.tableOrdinal === currentSpec.tableOrdinal,
+        );
       if (!previousSpec) {
         continue;
       }
 
-      const headerChanged = previousSpec.rawHeaderLine !== currentSpec.rawHeaderLine;
-      const separatorChanged = previousSpec.rawSeparatorLine !== currentSpec.rawSeparatorLine;
-      const sameColumnCount = previousSpec.columns.length === currentSpec.columns.length;
-      const columnCountChanged = previousSpec.columns.length !== currentSpec.columns.length;
-      const bodyChanged = !areStringArraysEqual(previousSpec.bodyLines, currentSpec.bodyLines);
+      const headerChanged =
+        previousSpec.rawHeaderLine !== currentSpec.rawHeaderLine;
+      const separatorChanged =
+        previousSpec.rawSeparatorLine !== currentSpec.rawSeparatorLine;
+      const sameColumnCount =
+        previousSpec.columns.length === currentSpec.columns.length;
+      const columnCountChanged =
+        previousSpec.columns.length !== currentSpec.columns.length;
+      const bodyChanged = !areStringArraysEqual(
+        previousSpec.bodyLines,
+        currentSpec.bodyLines,
+      );
       const reorderedColumns = sameColumnCount
         ? reorderColumnsByHeader(previousSpec, currentSpec)
         : null;
@@ -354,18 +390,29 @@ export class TableColumnResizeController {
         continue;
       }
 
-      if (headerChanged && columnCountChanged && (transferredColumns?.matchedCount || 0) > 0) {
+      if (
+        headerChanged &&
+        columnCountChanged &&
+        (transferredColumns?.matchedCount || 0) > 0
+      ) {
         restorations.push({
           lineIndex: currentSpec.separatorLineIndex,
-          line: buildSeparatorLineFromColumns(transferredColumns?.columns || []),
+          line: buildSeparatorLineFromColumns(
+            transferredColumns?.columns || [],
+          ),
         });
         continue;
       }
 
-      if (separatorChanged && sameColumnCount && (headerChanged || bodyChanged)) {
+      if (
+        separatorChanged &&
+        sameColumnCount &&
+        (headerChanged || bodyChanged)
+      ) {
         restorations.push({
           lineIndex:
-            findSeparatorLineForSpec(markdown, currentSpec) ?? currentSpec.separatorLineIndex,
+            findSeparatorLineForSpec(markdown, currentSpec) ??
+            currentSpec.separatorLineIndex,
           line: previousSpec.rawSeparatorLine,
         });
       }
@@ -391,14 +438,21 @@ export class TableColumnResizeController {
 
     const nextMarkdown = editor.getValue();
     this.fileMarkdownSnapshots.set(filePath, nextMarkdown);
-    this.fileTableSnapshots.set(filePath, extractMarkdownTableSpecs(nextMarkdown));
+    this.fileTableSnapshots.set(
+      filePath,
+      extractMarkdownTableSpecs(nextMarkdown),
+    );
     this.scheduleRefresh("editor-change-restoration");
     if (context?.view instanceof MarkdownView) {
       await this.syncPreviewAfterMarkdownChange(context.view);
     }
   }
 
-  tryCompleteTaskSyntax(editor: EditorLike, filePath: string, previousMarkdown: string): boolean {
+  tryCompleteTaskSyntax(
+    editor: EditorLike,
+    filePath: string,
+    previousMarkdown: string,
+  ): boolean {
     if (
       !this.plugin.settings.enableTaskSyntaxCompletion ||
       typeof editor.getCursor !== "function" ||
@@ -409,7 +463,11 @@ export class TableColumnResizeController {
     }
 
     const cursor = editor.getCursor();
-    if (!cursor || typeof cursor.line !== "number" || typeof cursor.ch !== "number") {
+    if (
+      !cursor ||
+      typeof cursor.line !== "number" ||
+      typeof cursor.ch !== "number"
+    ) {
       return false;
     }
 
@@ -432,7 +490,11 @@ export class TableColumnResizeController {
 
     this.markInternalChange(filePath);
     if (beforeCursor.endsWith("[")) {
-      editor.replaceRange("[ ] ", { line: cursor.line, ch: cursor.ch - 1 }, cursor);
+      editor.replaceRange(
+        "[ ] ",
+        { line: cursor.line, ch: cursor.ch - 1 },
+        cursor,
+      );
     } else {
       editor.replaceRange(" ] ", cursor);
     }
@@ -456,7 +518,11 @@ export class TableColumnResizeController {
     fallbackIndex: number | null,
     view: MarkdownViewLike | null = null,
   ): MarkdownTableSpec | null {
-    if (!Array.isArray(specs) || !specs.length || !(table instanceof HTMLTableElement)) {
+    if (
+      !Array.isArray(specs) ||
+      !specs.length ||
+      !(table instanceof HTMLTableElement)
+    ) {
       return null;
     }
 
@@ -489,7 +555,9 @@ export class TableColumnResizeController {
         const columnCount = getDomTableColumnCount(table);
         let candidates = rangedMatches;
         if (columnCount > 0) {
-          const exact = rangedMatches.filter(({ spec }) => spec.headerCells.length === columnCount);
+          const exact = rangedMatches.filter(
+            ({ spec }) => spec.headerCells.length === columnCount,
+          );
           if (exact.length === 1) {
             usedIndexes.add(exact[0].index);
             return exact[0].spec;
@@ -519,16 +587,24 @@ export class TableColumnResizeController {
     }
 
     const bodySignature = domTableBodySignature(table);
-    const bodyMatches = matchSpecIndexesByBodySignature(bodySignature, specs, usedIndexes);
+    const bodyMatches = matchSpecIndexesByBodySignature(
+      bodySignature,
+      specs,
+      usedIndexes,
+    );
     if (bodyMatches.length === 1) {
       usedIndexes.add(bodyMatches[0]);
       return specs[bodyMatches[0]];
     }
 
-    const separatorLine = Number.parseInt(table.dataset.markplusSeparatorLine ?? "", 10);
+    const separatorLine = Number.parseInt(
+      table.dataset.markplusSeparatorLine ?? "",
+      10,
+    );
     if (Number.isInteger(separatorLine) && separatorLine >= 0) {
       const matchedIndex = specs.findIndex(
-        (spec, index) => !usedIndexes.has(index) && spec.separatorLineIndex === separatorLine,
+        (spec, index) =>
+          !usedIndexes.has(index) && spec.separatorLineIndex === separatorLine,
       );
       if (matchedIndex >= 0) {
         usedIndexes.add(matchedIndex);
@@ -543,10 +619,13 @@ export class TableColumnResizeController {
         .map((spec, index) => ({ spec, index }))
         .filter(
           ({ spec, index }) =>
-            !usedIndexes.has(index) && specContentSignature(spec) === contentSignature,
+            !usedIndexes.has(index) &&
+            specContentSignature(spec) === contentSignature,
         );
       if (columnCount > 0 && contentMatches.length > 1) {
-        const exact = contentMatches.filter(({ spec }) => spec.headerCells.length === columnCount);
+        const exact = contentMatches.filter(
+          ({ spec }) => spec.headerCells.length === columnCount,
+        );
         if (exact.length === 1) {
           usedIndexes.add(exact[0].index);
           return exact[0].spec;
@@ -567,10 +646,13 @@ export class TableColumnResizeController {
         .map((spec, index) => ({ spec, index }))
         .filter(
           ({ spec, index }) =>
-            !usedIndexes.has(index) && specHeaderSignature(spec) === headerSignature,
+            !usedIndexes.has(index) &&
+            specHeaderSignature(spec) === headerSignature,
         );
       if (columnCount > 0 && headerMatches.length > 1) {
-        const exact = headerMatches.filter(({ spec }) => spec.headerCells.length === columnCount);
+        const exact = headerMatches.filter(
+          ({ spec }) => spec.headerCells.length === columnCount,
+        );
         if (exact.length === 1) {
           usedIndexes.add(exact[0].index);
           return exact[0].spec;
@@ -617,35 +699,52 @@ export class TableColumnResizeController {
       return;
     }
 
-    const columnCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+    const columnCount = Math.max(
+      ...Array.from(table.rows).map((row) => row.cells.length),
+      0,
+    );
     if (columnCount < 1) {
       return;
     }
 
-    table.className = table.className
-      .split(/\s+/)
-      .filter(
-        (className) =>
-          className &&
-          !className.startsWith("markplus-table-style-") &&
-          !MARKPLUS_TABLE_ALIGNMENT_CLASSES.includes(className),
-      )
-      .join(" ");
-    table.classList.add("markplus-resizable-table");
+    this.applyTableStyleClasses(table);
     table.dataset.markplusTableIndex = String(tableIndex);
-    table.dataset.markplusTableOrdinal = String(tableSpec?.tableOrdinal ?? tableIndex);
-    if (tableSpec) {
-      table.dataset.markplusSeparatorLine = String(tableSpec.separatorLineIndex);
+
+    if (!tableSpec) {
+      if (isReadingModeTable(table)) {
+        this.alignPreviewTableWrapper(table);
+      }
+      this.removeResizeHandles(table);
+      return;
     }
 
-    this.applyTableStyleClasses(table);
-    this.applyTableColumnAlignment(table, tableSpec?.columns || []);
+    if (Number.isInteger(tableSpec.tableOrdinal)) {
+      table.dataset.markplusTableOrdinal = String(tableSpec.tableOrdinal);
+    } else {
+      delete table.dataset.markplusTableOrdinal;
+    }
+    if (Number.isInteger(tableSpec.separatorLineIndex)) {
+      table.dataset.markplusSeparatorLine = String(tableSpec.separatorLineIndex);
+    } else {
+      delete table.dataset.markplusSeparatorLine;
+    }
 
     const colgroup = this.ensureColgroup(table, columnCount);
     colgroup.dataset.markplusInitialized = "true";
 
     const widths = this.getWidthsForTable(table, tableSpec, columnCount);
     this.applyWidthsToColgroup(table, colgroup, widths);
+    this.applyTableColumnAlignment(table, tableSpec.columns);
+
+    if (this.plugin.settings.enableTableFormulas) {
+      applyTableFormulasToDom(table, tableSpec);
+    }
+
+    if (isReadingModeTable(table)) {
+      this.removeResizeHandles(table);
+      return;
+    }
+
     this.bindTableHoverTracking(table);
     this.syncHandleCount(table, columnCount, tableSpec, view);
     this.syncScaleHandle(table, tableSpec, view);
@@ -653,18 +752,19 @@ export class TableColumnResizeController {
     this.bindTableCellFill(table);
     this.syncActiveFillCell(table, tableSpec, view);
 
-    if (this.plugin.settings.enableTableFormulas) {
-      applyTableFormulasToDom(table, tableSpec);
-    }
   }
 
   applyTableStyleClasses(table: HTMLTableElement): void {
     const styleVariant =
-      this.plugin.settings.tableStyleVariant || DEFAULT_SETTINGS.tableStyleVariant;
+      this.plugin.settings.tableStyleVariant ||
+      DEFAULT_SETTINGS.tableStyleVariant;
     table.dataset.markplusStyle = styleVariant;
     table.className = table.className
       .split(/\s+/)
-      .filter((className) => className && !className.startsWith("markplus-table-style-"))
+      .filter(
+        (className) =>
+          className && !className.startsWith("markplus-table-style-"),
+      )
       .join(" ");
     table.classList.add(`markplus-table-style-${styleVariant}`);
   }
@@ -687,8 +787,13 @@ export class TableColumnResizeController {
     return this.readCurrentWidths(table, columnCount);
   }
 
-  ensureColgroup(table: HTMLTableElement, columnCount: number): HTMLTableColElement {
-    let colgroup = table.querySelector(":scope > colgroup.markplus-colgroup") as HTMLTableColElement | null;
+  ensureColgroup(
+    table: HTMLTableElement,
+    columnCount: number,
+  ): HTMLTableColElement {
+    let colgroup = table.querySelector(
+      ":scope > colgroup.markplus-colgroup",
+    ) as HTMLTableColElement | null;
     if (!colgroup) {
       colgroup = document.createElement("colgroup") as HTMLTableColElement;
       colgroup.className = "markplus-colgroup";
@@ -742,7 +847,14 @@ export class TableColumnResizeController {
       const handle = document.createElement("div");
       handle.className = "markplus-column-handle";
       handle.addEventListener("pointerdown", (event) => {
-        this.startDragging(event, handle, table, handles.indexOf(handle), tableSpec, view);
+        this.startDragging(
+          event,
+          handle,
+          table,
+          handles.indexOf(handle),
+          tableSpec,
+          view,
+        );
       });
       table.appendChild(handle);
       handles.push(handle);
@@ -815,7 +927,10 @@ export class TableColumnResizeController {
     this.positionMenuButton(table, button);
   }
 
-  positionMenuButton(table: HTMLTableElement, button: HTMLButtonElement | null = null): void {
+  positionMenuButton(
+    table: HTMLTableElement,
+    button: HTMLButtonElement | null = null,
+  ): void {
     const current = button || this.menuButtonMap.get(table);
     if (!current) {
       return;
@@ -835,20 +950,29 @@ export class TableColumnResizeController {
     const resolvedView = view || this.getViewForTable(table);
     const resolvedSpec = this.resolveTableSpec(table, tableSpec, resolvedView);
     const styleVariant =
-      this.plugin.settings.tableStyleVariant || DEFAULT_SETTINGS.tableStyleVariant;
+      this.plugin.settings.tableStyleVariant ||
+      DEFAULT_SETTINGS.tableStyleVariant;
     const alignment = this.getTableAlignment(resolvedView, resolvedSpec);
     const menu = new Menu();
 
     menu.addItem((item) => {
-      item.setTitle("复制表格").setIcon("copy").onClick(() => {
-        this.copyTableToClipboard(resolvedView, resolvedSpec, table);
-      });
+      item
+        .setTitle("复制表格")
+        .setIcon("copy")
+        .onClick(() => {
+          this.copyTableToClipboard(resolvedView, resolvedSpec, table);
+        });
     });
 
     menu.addItem((item) => {
-      item.setTitle("删除表格").setIcon("trash").onClick(() => {
-        this.deleteTableFromMarkdown(resolvedView, resolvedSpec, table).catch(() => {});
-      });
+      item
+        .setTitle("删除表格")
+        .setIcon("trash")
+        .onClick(() => {
+          this.deleteTableFromMarkdown(resolvedView, resolvedSpec, table).catch(
+            () => {},
+          );
+        });
     });
 
     menu.addSeparator();
@@ -859,7 +983,12 @@ export class TableColumnResizeController {
           .setIcon(option.icon)
           .setChecked(alignment === option.value)
           .onClick(() => {
-            this.setTableAlignment(resolvedView, resolvedSpec, table, option.value).catch(() => {});
+            this.setTableAlignment(
+              resolvedView,
+              resolvedSpec,
+              table,
+              option.value,
+            ).catch(() => {});
           });
       });
     });
@@ -867,9 +996,12 @@ export class TableColumnResizeController {
     menu.addSeparator();
     TABLE_STYLE_OPTIONS.forEach((option) => {
       menu.addItem((item) => {
-        item.setTitle(option.label).setChecked(styleVariant === option.value).onClick(() => {
-          this.setGlobalTableStyleVariant(option.value).catch(() => {});
-        });
+        item
+          .setTitle(option.label)
+          .setChecked(styleVariant === option.value)
+          .onClick(() => {
+            this.setGlobalTableStyleVariant(option.value).catch(() => {});
+          });
       });
     });
 
@@ -882,7 +1014,10 @@ export class TableColumnResizeController {
   ): TableAlignment | null {
     const editor = view?.editor;
     if (editor && tableSpec && typeof editor.getValue === "function") {
-      const separatorLine = findSeparatorLineForSpec(editor.getValue(), tableSpec);
+      const separatorLine = findSeparatorLineForSpec(
+        editor.getValue(),
+        tableSpec,
+      );
       if (separatorLine !== null && typeof editor.getLine === "function") {
         const separator = parseSeparatorLine(editor.getLine(separatorLine));
         if (separator?.columns?.length) {
@@ -936,14 +1071,24 @@ export class TableColumnResizeController {
     this.markInternalChange(view.file.path);
     this.preserveEditorScroll(view, () => {
       const currentLine = editor.getLine(separatorLine);
-      editor.replaceRange(nextLine, { line: separatorLine, ch: 0 }, { line: separatorLine, ch: currentLine.length });
+      editor.replaceRange(
+        nextLine,
+        { line: separatorLine, ch: 0 },
+        { line: separatorLine, ch: currentLine.length },
+      );
     });
 
     const nextMarkdown = editor.getValue();
     this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-    this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+    this.fileTableSnapshots.set(
+      view.file.path,
+      extractMarkdownTableSpecs(nextMarkdown),
+    );
 
-    const targetTable = table instanceof HTMLTableElement ? table : this.findTableForSpec(view, resolvedSpec);
+    const targetTable =
+      table instanceof HTMLTableElement
+        ? table
+        : this.findTableForSpec(view, resolvedSpec);
     if (targetTable) {
       this.applyTableColumnAlignment(targetTable, nextColumns);
       this.positionHandles(targetTable);
@@ -954,7 +1099,10 @@ export class TableColumnResizeController {
     this.syncReadingPresentation("table-alignment");
   }
 
-  findTableForSpec(view: MarkdownViewLike, tableSpec: MarkdownTableSpec | null): HTMLTableElement | null {
+  findTableForSpec(
+    view: MarkdownViewLike,
+    tableSpec: MarkdownTableSpec | null,
+  ): HTMLTableElement | null {
     if (!tableSpec) {
       return null;
     }
@@ -975,7 +1123,11 @@ export class TableColumnResizeController {
     table: HTMLTableElement,
     columns: Array<MarkdownTableColumn | null | undefined>,
   ): void {
-    if (!(table instanceof HTMLTableElement) || !Array.isArray(columns) || !columns.length) {
+    if (
+      !(table instanceof HTMLTableElement) ||
+      !Array.isArray(columns) ||
+      !columns.length
+    ) {
       return;
     }
 
@@ -989,7 +1141,10 @@ export class TableColumnResizeController {
 
     for (const row of Array.from(table.rows)) {
       Array.from(row.cells).forEach((cell, index) => {
-        this.setCellAlignmentClass(cell, getColumnAlignmentKind(columns[index]));
+        this.setCellAlignmentClass(
+          cell,
+          getColumnAlignmentKind(columns[index]),
+        );
       });
     }
   }
@@ -1022,7 +1177,11 @@ export class TableColumnResizeController {
   ): Promise<void> {
     const markdown = getTableMarkdownForCopy(
       view || this.getViewForTable(table),
-      this.resolveTableSpec(table, tableSpec, view || this.getViewForTable(table)),
+      this.resolveTableSpec(
+        table,
+        tableSpec,
+        view || this.getViewForTable(table),
+      ),
       table,
     );
     if (!markdown) {
@@ -1057,10 +1216,16 @@ export class TableColumnResizeController {
 
     const start = tableSpec.headerLineIndex;
     const end = tableSpec.separatorLineIndex + tableSpec.bodyLines.length;
-    const lineCount = typeof editor.lineCount === "function"
-      ? editor.lineCount()
-      : editor.getValue().split(/\r?\n/).length;
-    if (!Number.isInteger(start) || start < 0 || end < start || end >= lineCount) {
+    const lineCount =
+      typeof editor.lineCount === "function"
+        ? editor.lineCount()
+        : editor.getValue().split(/\r?\n/).length;
+    if (
+      !Number.isInteger(start) ||
+      start < 0 ||
+      end < start ||
+      end >= lineCount
+    ) {
       return;
     }
 
@@ -1068,17 +1233,32 @@ export class TableColumnResizeController {
       this.markInternalChange(view.file.path);
       const endLineLength = editor.getLine(end).length;
       if (end < lineCount - 1) {
-        editor.replaceRange("", { line: start, ch: 0 }, { line: end + 1, ch: 0 });
+        editor.replaceRange(
+          "",
+          { line: start, ch: 0 },
+          { line: end + 1, ch: 0 },
+        );
       } else if (start > 0) {
         const previousLength = editor.getLine(start - 1).length;
-        editor.replaceRange("", { line: start - 1, ch: previousLength }, { line: end, ch: endLineLength });
+        editor.replaceRange(
+          "",
+          { line: start - 1, ch: previousLength },
+          { line: end, ch: endLineLength },
+        );
       } else {
-        editor.replaceRange("", { line: 0, ch: 0 }, { line: end, ch: endLineLength });
+        editor.replaceRange(
+          "",
+          { line: 0, ch: 0 },
+          { line: end, ch: endLineLength },
+        );
       }
 
       const nextMarkdown = editor.getValue();
       this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+      this.fileTableSnapshots.set(
+        view.file.path,
+        extractMarkdownTableSpecs(nextMarkdown),
+      );
     });
 
     this.removeResizeHandles(table);
@@ -1093,11 +1273,15 @@ export class TableColumnResizeController {
         return view;
       }
     }
+
     return null;
   }
 
   bindTableCellFill(table: HTMLTableElement): void {
-    if (!this.plugin.settings.enableTableCellFill || table.dataset.markplusFillBound === "true") {
+    if (
+      !this.plugin.settings.enableTableCellFill ||
+      table.dataset.markplusFillBound === "true"
+    ) {
       return;
     }
 
@@ -1115,7 +1299,9 @@ export class TableColumnResizeController {
           return;
         }
 
-        const cell = (event.target as Element | null)?.closest("td, th") as HTMLTableCellElement | null;
+        const cell = (event.target as Element | null)?.closest(
+          "td, th",
+        ) as HTMLTableCellElement | null;
         if (!cell || !table.contains(cell)) {
           return;
         }
@@ -1152,7 +1338,14 @@ export class TableColumnResizeController {
     }
 
     const currentSpecs = extractMarkdownTableSpecs(view.editor.getValue());
-    for (const index of [getTableMatchIndex(table), fallbackSpec?.tableOrdinal].filter(
+    if (currentSpecs.length === 1) {
+      return currentSpecs[0];
+    }
+
+    for (const index of [
+      getTableMatchIndex(table),
+      fallbackSpec?.tableOrdinal,
+    ].filter(
       (value): value is number => Number.isInteger(value) && value >= 0,
     )) {
       if (index < currentSpecs.length) {
@@ -1163,8 +1356,12 @@ export class TableColumnResizeController {
     for (const separatorLine of [
       Number.parseInt(table.dataset.markplusSeparatorLine ?? "", 10),
       fallbackSpec?.separatorLineIndex,
-    ].filter((value): value is number => Number.isInteger(value) && value >= 0)) {
-      const matched = currentSpecs.find((spec) => spec.separatorLineIndex === separatorLine);
+    ].filter(
+      (value): value is number => Number.isInteger(value) && value >= 0,
+    )) {
+      const matched = currentSpecs.find(
+        (spec) => spec.separatorLineIndex === separatorLine,
+      );
       if (matched) {
         return matched;
       }
@@ -1202,9 +1399,12 @@ export class TableColumnResizeController {
     if (!handle) {
       handle = document.createElement("div");
       handle.className = "markplus-cell-fill-handle";
-      handle.addEventListener("pointerdown", (event) => {
-        this.startFillDrag(event, table);
-      });
+      handle.addEventListener(
+        "pointerdown",
+        (event) => {
+          this.startFillDrag(event, table);
+        },
+      );
       this.cellFillHandleMap.set(table, handle);
     }
 
@@ -1225,7 +1425,11 @@ export class TableColumnResizeController {
     tableSpec: MarkdownTableSpec | null,
     view: MarkdownViewLike | null,
   ): void {
-    if (!this.fillState || this.fillState.table !== table || this.fillDragState) {
+    if (
+      !this.fillState ||
+      this.fillState.table !== table ||
+      this.fillDragState
+    ) {
       return;
     }
 
@@ -1239,7 +1443,11 @@ export class TableColumnResizeController {
     const resolvedView = view || this.getViewForTable(table);
     this.fillState.cell = sourceCell;
     this.fillState.view = resolvedView;
-    this.fillState.tableSpec = this.resolveTableSpec(table, tableSpec, resolvedView);
+    this.fillState.tableSpec = this.resolveTableSpec(
+      table,
+      tableSpec,
+      resolvedView,
+    );
     if (!sourceCell.contains(handle)) {
       sourceCell.appendChild(handle);
     }
@@ -1312,7 +1520,7 @@ export class TableColumnResizeController {
       return;
     }
 
-    const { table, sourceRow, sourceCol, fillHandle } = this.fillDragState;
+    const { table, sourceRow, sourceCol } = this.fillDragState;
     const targetCell = getTableCellFromPoint(
       table,
       event.clientX,
@@ -1348,7 +1556,9 @@ export class TableColumnResizeController {
       tableSpec: dragTableSpec,
     } = this.fillDragState;
     const tableSpec = this.resolveTableSpec(table, dragTableSpec, view);
-    const sourceText = tableSpec ? getCellSourceText(tableSpec, sourceRow, sourceCol) : null;
+    const sourceText = tableSpec
+      ? getCellSourceText(tableSpec, sourceRow, sourceCol)
+      : null;
     const targetCell = getTableCellFromPoint(
       table,
       event.clientX,
@@ -1415,7 +1625,10 @@ export class TableColumnResizeController {
     }
   }
 
-  highlightFillTargets(table: HTMLTableElement, targets: TableCellCoords[]): void {
+  highlightFillTargets(
+    table: HTMLTableElement,
+    targets: TableCellCoords[],
+  ): void {
     for (const { rowIndex, colIndex } of targets) {
       const cell = table.rows[rowIndex]?.cells[colIndex];
       cell?.classList.add("markplus-cell-fill-target");
@@ -1438,70 +1651,29 @@ export class TableColumnResizeController {
     options: { disableIncrementFill?: boolean } = {},
   ): Promise<void> {
     const editor = view?.editor;
-    if (!view?.file || !tableSpec || !Array.isArray(targets) || !targets.length) {
+    if (
+      !editor ||
+      !view?.file ||
+      !tableSpec ||
+      !Array.isArray(targets) ||
+      !targets.length
+    ) {
       return;
     }
 
-    if (editor) {
-      const updates = new Map<number, string>();
-      for (const { rowIndex, colIndex } of targets) {
-        if (rowIndex === sourceRow && colIndex === sourceCol) {
-          continue;
-        }
-
-        const markdownLineIndex = getMarkdownLineIndexForTableRow(tableSpec, rowIndex);
-        const currentLine = updates.has(markdownLineIndex)
-          ? (updates.get(markdownLineIndex) as string)
-          : editor.getLine(markdownLineIndex);
-        const nextValue = getFillCellValue(
-          sourceText,
-          sourceRow,
-          sourceCol,
-          rowIndex,
-          colIndex,
-          options,
-        );
-        updates.set(markdownLineIndex, replaceCellInMarkdownRow(currentLine, colIndex, nextValue));
-      }
-
-      if (!updates.size) {
-        return;
-      }
-
-      this.markInternalChange(view.file.path);
-      this.preserveEditorScroll(view, () => {
-        [...updates.entries()]
-          .sort((a, b) => b[0] - a[0])
-          .forEach(([lineIndex, value]) => {
-            const line = editor.getLine(lineIndex);
-            editor.replaceRange(value, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: line.length });
-          });
-      });
-
-      const markdown = editor.getValue();
-      this.fileMarkdownSnapshots.set(view.file.path, markdown);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(markdown));
-      await this.syncPreviewAfterMarkdownChange(view);
-      return;
-    }
-
-    const markdown =
-      this.fileMarkdownSnapshots.get(view.file.path) ||
-      (await this.plugin.app.vault.cachedRead(view.file));
-    const lines = markdown.split(/\r?\n/);
-    let hasChanges = false;
-
+    const updates = new Map<number, string>();
     for (const { rowIndex, colIndex } of targets) {
       if (rowIndex === sourceRow && colIndex === sourceCol) {
         continue;
       }
 
-      const markdownLineIndex = getMarkdownLineIndexForTableRow(tableSpec, rowIndex);
-      const currentLine = lines[markdownLineIndex];
-      if (typeof currentLine !== "string") {
-        continue;
-      }
-
+      const markdownLineIndex = getMarkdownLineIndexForTableRow(
+        tableSpec,
+        rowIndex,
+      );
+      const currentLine = updates.has(markdownLineIndex)
+        ? (updates.get(markdownLineIndex) as string)
+        : editor.getLine(markdownLineIndex);
       const nextValue = getFillCellValue(
         sourceText,
         sourceRow,
@@ -1510,21 +1682,37 @@ export class TableColumnResizeController {
         colIndex,
         options,
       );
-      const nextLine = replaceCellInMarkdownRow(currentLine, colIndex, nextValue);
-      if (nextLine !== currentLine) {
-        lines[markdownLineIndex] = nextLine;
-        hasChanges = true;
-      }
+      updates.set(
+        markdownLineIndex,
+        replaceCellInMarkdownRow(currentLine, colIndex, nextValue),
+      );
     }
 
-    if (!hasChanges) {
+    if (!updates.size) {
       return;
     }
 
-    const nextMarkdown = lines.join("\n");
-    await this.plugin.app.vault.modify(view.file, nextMarkdown);
-    this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-    this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+    this.markInternalChange(view.file.path, updates.size);
+    this.preserveEditorScroll(view, () => {
+      [...updates.entries()]
+        .sort((a, b) => b[0] - a[0])
+        .forEach(([lineIndex, value]) => {
+          const line = editor.getLine(lineIndex);
+          editor.replaceRange(
+            value,
+            { line: lineIndex, ch: 0 },
+            { line: lineIndex, ch: line.length },
+          );
+        });
+    });
+
+    const markdown = editor.getValue();
+    this.fileMarkdownSnapshots.set(view.file.path, markdown);
+    this.fileTableSnapshots.set(
+      view.file.path,
+      extractMarkdownTableSpecs(markdown),
+    );
+    await this.syncPreviewAfterMarkdownChange(view);
   }
 
   positionHandles(table: HTMLTableElement): void {
@@ -1624,7 +1812,8 @@ export class TableColumnResizeController {
       widths,
       tableSpec,
       view,
-      minWidth: this.plugin.settings.minColumnWidth || DEFAULT_SETTINGS.minColumnWidth,
+      minWidth:
+        this.plugin.settings.minColumnWidth || DEFAULT_SETTINGS.minColumnWidth,
     };
 
     table.classList.add("markplus-is-resizing");
@@ -1668,7 +1857,8 @@ export class TableColumnResizeController {
       widths,
       tableSpec,
       view,
-      minWidth: this.plugin.settings.minColumnWidth || DEFAULT_SETTINGS.minColumnWidth,
+      minWidth:
+        this.plugin.settings.minColumnWidth || DEFAULT_SETTINGS.minColumnWidth,
     };
 
     table.classList.add("markplus-is-resizing");
@@ -1698,16 +1888,22 @@ export class TableColumnResizeController {
       return null;
     }
 
-    const { mode, handleIndex, startX, widths, minWidth, startWidth } = this.dragState;
+    const { mode, handleIndex, startX, widths, minWidth, startWidth } =
+      this.dragState;
     const deltaX = event.clientX - startX;
     const nextWidths = widths.slice();
 
     if (mode === "scale") {
       const scale =
-        Math.max(minWidth * widths.length, Math.round((startWidth || 0) + deltaX)) /
-        (startWidth || 1);
+        Math.max(
+          minWidth * widths.length,
+          Math.round((startWidth || 0) + deltaX),
+        ) / (startWidth || 1);
       for (let index = 0; index < widths.length; index += 1) {
-        nextWidths[index] = Math.max(minWidth, Math.round(widths[index] * scale));
+        nextWidths[index] = Math.max(
+          minWidth,
+          Math.round(widths[index] * scale),
+        );
       }
       return nextWidths;
     }
@@ -1717,7 +1913,10 @@ export class TableColumnResizeController {
     }
 
     if (handleIndex === widths.length - 1) {
-      nextWidths[handleIndex] = Math.max(minWidth, Math.round(widths[handleIndex] + deltaX));
+      nextWidths[handleIndex] = Math.max(
+        minWidth,
+        Math.round(widths[handleIndex] + deltaX),
+      );
       return nextWidths;
     }
 
@@ -1737,7 +1936,8 @@ export class TableColumnResizeController {
     }
 
     const widths =
-      this.computeDragWidths(event) || this.readCurrentWidths(this.dragState.table);
+      this.computeDragWidths(event) ||
+      this.readCurrentWidths(this.dragState.table);
     const { table, tableSpec, view } = this.dragState;
     const colgroup = this.ensureColgroup(table, widths.length);
     this.applyWidthsToColgroup(table, colgroup, widths);
@@ -1757,7 +1957,11 @@ export class TableColumnResizeController {
       }
     }
 
-    await this.writeWidthsBackToMarkdown(this.readCurrentWidths(table), resolvedSpec, view);
+    await this.writeWidthsBackToMarkdown(
+      this.readCurrentWidths(table),
+      resolvedSpec,
+      view,
+    );
     this.stopDragging();
     if (view) {
       await this.syncPreviewAfterMarkdownChange(view);
@@ -1795,8 +1999,9 @@ export class TableColumnResizeController {
     window.removeEventListener("pointercancel", this.boundPointerCancel);
   }
 
-  markInternalChange(filePath: string): void {
-    const budget = (this.internalChangeBudget.get(filePath) || 0) + 1;
+  markInternalChange(filePath: string, count = 1): void {
+    const budget =
+      (this.internalChangeBudget.get(filePath) || 0) + Math.max(1, count);
     this.internalChangeBudget.set(filePath, budget);
   }
 
@@ -1814,7 +2019,10 @@ export class TableColumnResizeController {
     return true;
   }
 
-  readCurrentWidths(table: HTMLTableElement, fallbackCount: number | null = null): number[] {
+  readCurrentWidths(
+    table: HTMLTableElement,
+    fallbackCount: number | null = null,
+  ): number[] {
     const headerRow = getTableHeaderRow(table);
     if (headerRow?.cells.length) {
       return Array.from(headerRow.cells).map((cell) =>
@@ -1833,7 +2041,10 @@ export class TableColumnResizeController {
     }
 
     return fallbackCount
-      ? Array.from({ length: fallbackCount }, () => this.plugin.settings.minColumnWidth)
+      ? Array.from(
+          { length: fallbackCount },
+          () => this.plugin.settings.minColumnWidth,
+        )
       : [];
   }
 
@@ -1842,7 +2053,8 @@ export class TableColumnResizeController {
     colgroup: HTMLTableColElement,
     widths: number[],
   ): void {
-    const resolvedWidths = widths && widths.length ? widths : this.readCurrentWidths(table);
+    const resolvedWidths =
+      widths && widths.length ? widths : this.readCurrentWidths(table);
     Array.from(colgroup.children).forEach((col, index) => {
       const width = resolvedWidths[index];
       (col as HTMLElement).style.width = width ? `${width}px` : "";
@@ -1873,8 +2085,13 @@ export class TableColumnResizeController {
     }
   }
 
-  private preserveEditorScroll(view: MarkdownViewLike | null, action: () => void): void {
-    const scroller = view?.contentEl?.querySelector(".cm-scroller") as HTMLElement | null;
+  private preserveEditorScroll(
+    view: MarkdownViewLike | null,
+    action: () => void,
+  ): void {
+    const scroller = view?.contentEl?.querySelector(
+      ".cm-scroller",
+    ) as HTMLElement | null;
     const scrollTop = scroller?.scrollTop ?? null;
     const scrollLeft = scroller?.scrollLeft ?? null;
 
@@ -1900,7 +2117,9 @@ export class TableColumnResizeController {
     view: MarkdownViewLike | null,
     action: () => Promise<void> | void,
   ): Promise<void> {
-    const scroller = view?.contentEl?.querySelector(".cm-scroller") as HTMLElement | null;
+    const scroller = view?.contentEl?.querySelector(
+      ".cm-scroller",
+    ) as HTMLElement | null;
     const scrollTop = scroller?.scrollTop ?? null;
     const scrollLeft = scroller?.scrollLeft ?? null;
     await action();
@@ -1971,7 +2190,10 @@ export class TableColumnResizeController {
 
       const nextMarkdown = view.editor.getValue();
       this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+      this.fileTableSnapshots.set(
+        view.file.path,
+        extractMarkdownTableSpecs(nextMarkdown),
+      );
       return;
     }
 
@@ -1979,7 +2201,10 @@ export class TableColumnResizeController {
     const nextMarkdown = lines.join("\n");
     await this.plugin.app.vault.modify(view.file, nextMarkdown);
     this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-    this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+    this.fileTableSnapshots.set(
+      view.file.path,
+      extractMarkdownTableSpecs(nextMarkdown),
+    );
   }
 
   applyReadingPresentationForPreview(
@@ -2001,7 +2226,10 @@ export class TableColumnResizeController {
   }
 
   alignPreviewTableWrapper(table: HTMLTableElement): void {
-    if (!(table instanceof HTMLTableElement) || table.closest(".markdown-source-view, .cm-table-widget")) {
+    if (
+      !(table instanceof HTMLTableElement) ||
+      table.closest(".markdown-source-view, .cm-table-widget")
+    ) {
       return;
     }
 
@@ -2010,7 +2238,9 @@ export class TableColumnResizeController {
     table.style.marginInlineStart = "0";
     table.style.marginInlineEnd = "0";
 
-    const wrapper = table.closest(".el-table, .table-wrapper") as HTMLElement | null;
+    const wrapper = table.closest(
+      ".el-table, .table-wrapper",
+    ) as HTMLElement | null;
     if (!wrapper) {
       return;
     }
@@ -2040,7 +2270,9 @@ export class TableColumnResizeController {
 
   syncReadingPresentation(reason = "(unknown)"): void {
     window.requestAnimationFrame(() => {
-      for (const leaf of this.plugin.app.workspace.getLeavesOfType("markdown")) {
+      for (const leaf of this.plugin.app.workspace.getLeavesOfType(
+        "markdown",
+      )) {
         const view = leaf.view;
         if (
           view instanceof MarkdownView &&
@@ -2061,7 +2293,10 @@ export class TableColumnResizeController {
     const markdown = view.editor?.getValue?.();
     if (typeof markdown === "string") {
       this.fileMarkdownSnapshots.set(view.file.path, markdown);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(markdown));
+      this.fileTableSnapshots.set(
+        view.file.path,
+        extractMarkdownTableSpecs(markdown),
+      );
     }
 
     const previewMode = view.previewMode;
@@ -2074,14 +2309,21 @@ export class TableColumnResizeController {
       return;
     }
 
-    this.applyReadingPresentationForPreview(previewMode, "sync-markdown-change");
+    this.applyReadingPresentationForPreview(
+      previewMode,
+      "sync-markdown-change",
+    );
   }
 
   reapplyTableFormulasAfterFill(
     view: MarkdownViewLike | null,
     tableSpec: MarkdownTableSpec | null,
   ): void {
-    if (!this.plugin.settings.enableTableFormulas || !view?.contentEl || !tableSpec) {
+    if (
+      !this.plugin.settings.enableTableFormulas ||
+      !view?.contentEl ||
+      !tableSpec
+    ) {
       return;
     }
 
@@ -2093,8 +2335,12 @@ export class TableColumnResizeController {
 
       const specs = extractMarkdownTableSpecs(editor.getValue());
       const latestSpec =
-        specs.find((spec) => spec.separatorLineIndex === tableSpec.separatorLineIndex) ||
-        (Number.isInteger(tableSpec.tableOrdinal) ? specs[tableSpec.tableOrdinal] : null);
+        specs.find(
+          (spec) => spec.separatorLineIndex === tableSpec.separatorLineIndex,
+        ) ||
+        (Number.isInteger(tableSpec.tableOrdinal)
+          ? specs[tableSpec.tableOrdinal]
+          : null);
       if (!latestSpec) {
         return false;
       }
@@ -2105,7 +2351,9 @@ export class TableColumnResizeController {
         }
 
         const resolvedSpec = this.resolveTableSpec(node, latestSpec, view);
-        if (resolvedSpec?.separatorLineIndex === latestSpec.separatorLineIndex) {
+        if (
+          resolvedSpec?.separatorLineIndex === latestSpec.separatorLineIndex
+        ) {
           applyTableFormulasToDom(node, latestSpec);
           return true;
         }
@@ -2135,6 +2383,16 @@ export class TableColumnResizeController {
 
 function getDomTableColumnCount(table: HTMLTableElement): number {
   return Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+}
+
+function isReadingModeTable(table: Element): table is HTMLTableElement {
+  return (
+    table instanceof HTMLTableElement &&
+    !table.closest(".cm-table-widget, .markdown-source-view") &&
+    Boolean(
+      table.closest(".markdown-preview-view, .markdown-reading-view, .el-table"),
+    )
+  );
 }
 
 function toColumnPercents(widths: number[]): number[] {

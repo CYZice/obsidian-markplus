@@ -14,7 +14,9 @@
   max-width: var(--file-line-width);
 }
 
-.markdown-preview-view .markplus-table-wrapper > table.markplus-resizable-table {
+.markdown-preview-view
+  .markplus-table-wrapper
+  > table.markplus-resizable-table {
   width: 100%;
   max-width: 100%;
   margin: 0 !important;
@@ -45,33 +47,72 @@
   overflow-wrap: break-word;
 }
 
-.markdown-source-view .cm-table-widget table.markplus-resizable-table.markplus-table-align-left :is(td, th),
-.cm-preview-code-block table.markplus-resizable-table.markplus-table-align-left :is(td, th),
-.markdown-preview-view table.markplus-resizable-table.markplus-table-align-left :is(td, th),
-.markdown-reading-view table.markplus-resizable-table.markplus-table-align-left :is(td, th),
+.markdown-source-view
+  .cm-table-widget
+  table.markplus-resizable-table.markplus-table-align-left
+  :is(td, th),
+.cm-preview-code-block
+  table.markplus-resizable-table.markplus-table-align-left
+  :is(td, th),
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-align-left
+  :is(td, th),
+.markdown-reading-view
+  table.markplus-resizable-table.markplus-table-align-left
+  :is(td, th),
 .markplus-resizable-table.markplus-table-align-left :is(td, th) {
   text-align: left !important;
 }
 
-.markdown-source-view .cm-table-widget table.markplus-resizable-table.markplus-table-align-center :is(td, th),
-.cm-preview-code-block table.markplus-resizable-table.markplus-table-align-center :is(td, th),
-.markdown-preview-view table.markplus-resizable-table.markplus-table-align-center :is(td, th),
-.markdown-reading-view table.markplus-resizable-table.markplus-table-align-center :is(td, th),
+.markdown-source-view
+  .cm-table-widget
+  table.markplus-resizable-table.markplus-table-align-center
+  :is(td, th),
+.cm-preview-code-block
+  table.markplus-resizable-table.markplus-table-align-center
+  :is(td, th),
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-align-center
+  :is(td, th),
+.markdown-reading-view
+  table.markplus-resizable-table.markplus-table-align-center
+  :is(td, th),
 .markplus-resizable-table.markplus-table-align-center :is(td, th) {
   text-align: center !important;
 }
 
-.markdown-source-view .cm-table-widget table.markplus-resizable-table.markplus-table-align-right :is(td, th),
-.cm-preview-code-block table.markplus-resizable-table.markplus-table-align-right :is(td, th),
-.markdown-preview-view table.markplus-resizable-table.markplus-table-align-right :is(td, th),
-.markdown-reading-view table.markplus-resizable-table.markplus-table-align-right :is(td, th),
+.markdown-source-view
+  .cm-table-widget
+  table.markplus-resizable-table.markplus-table-align-right
+  :is(td, th),
+.cm-preview-code-block
+  table.markplus-resizable-table.markplus-table-align-right
+  :is(td, th),
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-align-right
+  :is(td, th),
+.markdown-reading-view
+  table.markplus-resizable-table.markplus-table-align-right
+  :is(td, th),
 .markplus-resizable-table.markplus-table-align-right :is(td, th) {
   text-align: right !important;
 }
 
-.markdown-source-view .cm-table-widget table.markplus-resizable-table.markplus-table-align-left :is(td, th) .cm-line,
-.markdown-source-view .cm-table-widget table.markplus-resizable-table.markplus-table-align-center :is(td, th) .cm-line,
-.markdown-source-view .cm-table-widget table.markplus-resizable-table.markplus-table-align-right :is(td, th) .cm-line {
+.markdown-source-view
+  .cm-table-widget
+  table.markplus-resizable-table.markplus-table-align-left
+  :is(td, th)
+  .cm-line,
+.markdown-source-view
+  .cm-table-widget
+  table.markplus-resizable-table.markplus-table-align-center
+  :is(td, th)
+  .cm-line,
+.markdown-source-view
+  .cm-table-widget
+  table.markplus-resizable-table.markplus-table-align-right
+  :is(td, th)
+  .cm-line {
   text-align: inherit !important;
 }
 
@@ -87,10 +128,18 @@
   text-align: right !important;
 }
 
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-horizontal-lines th,
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-horizontal-lines td,
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped th,
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped td,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines
+  th,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines
+  td,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  th,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  td,
 .markplus-resizable-table.markplus-table-style-horizontal-lines th,
 .markplus-resizable-table.markplus-table-style-horizontal-lines td,
 .markplus-resizable-table.markplus-table-style-horizontal-lines-striped th,
@@ -101,20 +150,59 @@
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-striped-rows tbody tr:nth-child(even) > *,
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped tbody tr:nth-child(even) > *,
-.markdown-reading-view table.markplus-resizable-table.markplus-table-style-striped-rows tbody tr:nth-child(even) > *,
-.markdown-reading-view table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped tbody tr:nth-child(even) > *,
-.markplus-resizable-table.markplus-table-style-striped-rows tbody tr:nth-child(even) > *,
-.markplus-resizable-table.markplus-table-style-horizontal-lines-striped tbody tr:nth-child(even) > * {
-  background-color: var(--markplus-table-stripe-row-background, var(--background-modifier-form-field));
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-striped-rows
+  tbody
+  tr:nth-child(even)
+  > *,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  tbody
+  tr:nth-child(even)
+  > *,
+.markdown-reading-view
+  table.markplus-resizable-table.markplus-table-style-striped-rows
+  tbody
+  tr:nth-child(even)
+  > *,
+.markdown-reading-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  tbody
+  tr:nth-child(even)
+  > *,
+.markplus-resizable-table.markplus-table-style-striped-rows
+  tbody
+  tr:nth-child(even)
+  > *,
+.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  tbody
+  tr:nth-child(even)
+  > * {
+  background-color: var(
+    --markplus-table-stripe-row-background,
+    var(--background-modifier-form-field)
+  );
 }
 
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-striped-rows thead tr > *,
-.markdown-preview-view table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped thead tr > *,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-striped-rows
+  thead
+  tr
+  > *,
+.markdown-preview-view
+  table.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  thead
+  tr
+  > *,
 .markplus-resizable-table.markplus-table-style-striped-rows thead tr > *,
-.markplus-resizable-table.markplus-table-style-horizontal-lines-striped thead tr > * {
-  background-color: var(--markplus-table-header-background, var(--background-modifier-form-field)) !important;
+.markplus-resizable-table.markplus-table-style-horizontal-lines-striped
+  thead
+  tr
+  > * {
+  background-color: var(
+    --markplus-table-header-background,
+    var(--background-modifier-form-field)
+  ) !important;
 }
 
 .markdown-source-view.is-live-preview .markplus-formula-result {
@@ -143,10 +231,13 @@
   border-radius: 999px;
   background: transparent;
   opacity: 0;
-  transition: background-color 120ms ease, opacity 120ms ease;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease;
 }
 
-.markplus-resizable-table.markplus-has-active-handle .markplus-column-handle.is-active::after,
+.markplus-resizable-table.markplus-has-active-handle
+  .markplus-column-handle.is-active::after,
 .markplus-column-handle:hover::after {
   opacity: 1;
   background: var(--tab-outline-color);
@@ -163,7 +254,10 @@
   background: transparent !important;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .markplus-resizable-table:hover .markplus-table-menu-button,
@@ -178,41 +272,31 @@
 
 .markplus-table-scale-handle {
   position: absolute;
-  right: -10px;
-  bottom: -10px;
-  width: 24px;
-  height: 24px;
+  right: 0px;
+  bottom: 0px;
+  width: 14px;
+  height: 14px;
   cursor: nwse-resize;
   user-select: none;
   touch-action: none;
-  z-index: 40;
-  display: block;
-  color: transparent;
-  background: transparent !important;
-  border: 0 !important;
-  outline: none !important;
-  box-shadow: none !important;
-  border-radius: 0 !important;
-  transition: color 120ms ease, opacity 120ms ease;
+  z-index: 25;
+  border-right: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transition:
+    border-color 120ms ease,
+    opacity 120ms ease;
   opacity: 0;
 }
 
-.markplus-table-scale-handle::before {
-  content: "";
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: 5px;
-  height: 5px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-}
-
-.markplus-resizable-table:hover .markplus-table-scale-handle,
 .markplus-resizable-table.markplus-is-resizing .markplus-table-scale-handle,
 .markplus-table-scale-handle:hover {
   opacity: 1;
-  color: var(--color-orange);
+  border-right-color: var(--color-orange);
+  border-bottom-color: var(--color-orange);
+}
+
+.markplus-resizable-table.markplus-is-filling .markplus-table-scale-handle {
+  pointer-events: none;
 }
 
 .markplus-cell-fill-handle {
@@ -254,7 +338,9 @@ body.markplus-fill-cursor {
   font-size: var(--table-font-size, 16px);
 }
 
-.table-drag-fix :is(.markdown-preview-section, .markdown-rendered) table:not(.dataview.table-view-table) {
+.table-drag-fix
+  :is(.markdown-preview-section, .markdown-rendered)
+  table:not(.dataview.table-view-table) {
   margin: 16px 0 !important;
 }
 
@@ -264,6 +350,8 @@ body.markplus-fill-cursor {
   overflow-y: visible;
 }
 
-.markdown-source-view.mod-cm6 .cm-content > .cm-table-widget[contenteditable=false] {
+.markdown-source-view.mod-cm6
+  .cm-content
+  > .cm-table-widget[contenteditable="false"] {
   contain: layout style !important;
 }

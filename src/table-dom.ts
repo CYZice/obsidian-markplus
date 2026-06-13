@@ -3,8 +3,14 @@ export interface TableCellCoords {
   colIndex: number;
 }
 
-export function getTableHeaderRow(table: HTMLTableElement): HTMLTableRowElement | null {
-  return (table.querySelector("thead tr") as HTMLTableRowElement | null) || table.rows[0] || null;
+export function getTableHeaderRow(
+  table: HTMLTableElement,
+): HTMLTableRowElement | null {
+  return (
+    (table.querySelector("thead tr") as HTMLTableRowElement | null) ||
+    table.rows[0] ||
+    null
+  );
 }
 
 export function getCellCoords(
@@ -23,15 +29,30 @@ export function getTableCellFromPoint(
   clientX: number,
   clientY: number,
 ): HTMLTableCellElement | null {
-  if (typeof document.elementsFromPoint === "function") {
-    for (const node of document.elementsFromPoint(clientX, clientY)) {
-      if (node === table) {
-        break;
-      }
+  if (typeof document.elementsFromPoint !== "function") {
+    return null;
+  }
 
-      if ((node.tagName === "TD" || node.tagName === "TH") && table.contains(node)) {
-        return node as HTMLTableCellElement;
-      }
+  for (const node of document.elementsFromPoint(clientX, clientY)) {
+    if (node === table) {
+      break;
+    }
+
+    if (
+      node instanceof HTMLElement &&
+      (node.classList.contains("markplus-cell-fill-handle") ||
+        node.classList.contains("markplus-table-scale-handle") ||
+        node.classList.contains("markplus-column-handle") ||
+        node.classList.contains("markplus-table-menu-button"))
+    ) {
+      continue;
+    }
+
+    if (
+      (node.tagName === "TD" || node.tagName === "TH") &&
+      table.contains(node)
+    ) {
+      return node as HTMLTableCellElement;
     }
   }
 

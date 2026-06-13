@@ -854,7 +854,10 @@ function computeFillTargets(source, target) {
   }
   return targets;
 }
-function getFillCellValue(sourceText, sourceRow, sourceCol, targetRow, targetCol) {
+function getFillCellValue(sourceText, sourceRow, sourceCol, targetRow, targetCol, options = {}) {
+  if (options.disableIncrementFill) {
+    return sourceText;
+  }
   const delta = Math.abs(targetRow - sourceRow) >= Math.abs(targetCol - sourceCol) ? targetRow - sourceRow : targetCol - sourceCol;
   return incrementEmbeddedNumber(sourceText, delta);
 }
@@ -877,12 +880,26 @@ function findFirstNumericToken(sourceText) {
   return Number.isFinite(value) ? { raw: match[0], value, index: match.index } : null;
 }
 function formatFillNumber(value, sourceText) {
-  const decimalMatch = String(sourceText).trim().replace(/[,\s¥$€£%]/g, "").match(/^-?\d+\.(\d+)$/);
-  if (!decimalMatch) {
-    return String(Math.round(value));
+  const normalizedSource = String(sourceText).trim();
+  const decimalMatch = normalizedSource.replace(/[,\s\u00a5$\u20ac\u00a3%]/g, "").match(/^-?\d+\.(\d+)$/);
+  if (decimalMatch) {
+    const decimalLength = decimalMatch[1].length;
+    const precision = 10 ** decimalLength;
+    const roundedValue2 = Math.round(value * precision) / precision;
+    const integerWidth2 = getIntegerDigitWidth(normalizedSource);
+    const [integerPart2, decimalPart = ""] = Math.abs(roundedValue2).toFixed(decimalLength).split(".");
+    const paddedInteger2 = integerWidth2 > 1 ? integerPart2.padStart(integerWidth2, "0") : integerPart2;
+    return `${roundedValue2 < 0 ? "-" : ""}${paddedInteger2}.${decimalPart}`;
   }
-  const precision = 10 ** decimalMatch[1].length;
-  return String(Math.round(value * precision) / precision);
+  const roundedValue = Math.round(value);
+  const integerWidth = getIntegerDigitWidth(normalizedSource);
+  const integerPart = String(Math.abs(roundedValue));
+  const paddedInteger = integerWidth > 1 ? integerPart.padStart(integerWidth, "0") : integerPart;
+  return `${roundedValue < 0 ? "-" : ""}${paddedInteger}`;
+}
+function getIntegerDigitWidth(sourceText) {
+  const match = String(sourceText).trim().replace(/[,\s\u00a5$\u20ac\u00a3%]/g, "").match(/^-?(\d+)(?:\.\d+)?$/);
+  return match ? match[1].length : 0;
 }
 
 // src/table-dom.ts
@@ -897,14 +914,18 @@ function getCellCoords(table, cell) {
   };
 }
 function getTableCellFromPoint(table, clientX, clientY) {
-  if (typeof document.elementsFromPoint === "function") {
-    for (const node of document.elementsFromPoint(clientX, clientY)) {
-      if (node === table) {
-        break;
-      }
-      if ((node.tagName === "TD" || node.tagName === "TH") && table.contains(node)) {
-        return node;
-      }
+  if (typeof document.elementsFromPoint !== "function") {
+    return null;
+  }
+  for (const node of document.elementsFromPoint(clientX, clientY)) {
+    if (node === table) {
+      break;
+    }
+    if (node instanceof HTMLElement && (node.classList.contains("markplus-cell-fill-handle") || node.classList.contains("markplus-table-scale-handle") || node.classList.contains("markplus-column-handle") || node.classList.contains("markplus-table-menu-button"))) {
+      continue;
+    }
+    if ((node.tagName === "TD" || node.tagName === "TH") && table.contains(node)) {
+      return node;
     }
   }
   return null;
@@ -935,9 +956,14 @@ var TableColumnResizeController = class {
     this.boundFillPointerUp = this.onFillPointerUp.bind(this);
     this.boundFillPointerCancel = this.onFillPointerCancel.bind(this);
     this.boundDocumentPointerDown = this.onDocumentPointerDown.bind(this);
-    this.plugin.registerDomEvent(document, "pointerdown", this.boundDocumentPointerDown, {
-      capture: true
-    });
+    this.plugin.registerDomEvent(
+      document,
+      "pointerdown",
+      this.boundDocumentPointerDown,
+      {
+        capture: true
+      }
+    );
   }
   destroy() {
     if (this.refreshTimer !== null) {
@@ -972,13 +998,15 @@ var TableColumnResizeController = class {
   restoreSeparatorsAfterComposition() {
     const view = this.plugin.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
     if ((view == null ? void 0 : view.editor) && view.file) {
-      this.handleEditorChange(view.editor, { file: view.file }).catch((error) => {
-        console.error("MarkPlus composition restore failed", error);
-      });
+      this.handleEditorChange(view.editor, { file: view.file }).catch(
+        (error) => {
+          console.error("MarkPlus composition restore failed", error);
+        }
+      );
     }
   }
   async refreshAllTables() {
-    if (this.isComposing) {
+    if (this.isComposing || this.fillDragState) {
       return;
     }
     for (const leaf of this.plugin.app.workspace.getLeavesOfType("markdown")) {
@@ -991,14 +1019,24 @@ var TableColumnResizeController = class {
         continue;
       }
       this.ensureObserver(view.contentEl);
+      if (typeof view.getMode === "function" && view.getMode() === "preview") {
+        continue;
+      }
       const markdown = await this.getMarkdownSource(view);
       const specs = extractMarkdownTableSpecs(markdown);
       this.fileTableSnapshots.set(file.path, specs);
       this.fileMarkdownSnapshots.set(file.path, markdown);
       const tables = this.queryTablesForView(view);
       const usedIndexes = /* @__PURE__ */ new Set();
+      const canUseFallbackIndex = tables.length === specs.length;
       tables.forEach((table, index) => {
-        const tableSpec = this.matchSpecForTable(table, specs, usedIndexes, index, view);
+        const tableSpec = this.matchSpecForTable(
+          table,
+          specs,
+          usedIndexes,
+          canUseFallbackIndex ? index : null,
+          view
+        );
         this.decorateTable(table, tableSpec, view, index);
       });
       this.applyReadingPresentationForPreview(view.previewMode, "refresh");
@@ -1008,12 +1046,14 @@ var TableColumnResizeController = class {
     var _a;
     if (typeof view.getMode === "function" && view.getMode() === "preview") {
       const containerEl = (_a = view.previewMode) == null ? void 0 : _a.containerEl;
-      return containerEl ? Array.from(containerEl.querySelectorAll(PREVIEW_TABLE_SELECTOR)).filter(
+      return containerEl ? Array.from(
+        containerEl.querySelectorAll(PREVIEW_TABLE_SELECTOR)
+      ).filter(
         (node) => node instanceof HTMLTableElement
       ) : [];
     }
     return Array.from(view.contentEl.querySelectorAll(TABLE_SELECTOR)).filter(
-      (node) => node instanceof HTMLTableElement
+      (node) => node instanceof HTMLTableElement && !isReadingModeTable(node)
     );
   }
   reapplyWidthsFromCache(containerEl) {
@@ -1036,11 +1076,20 @@ var TableColumnResizeController = class {
         if (!(table instanceof HTMLTableElement)) {
           return;
         }
-        const rowCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+        const rowCount = Math.max(
+          ...Array.from(table.rows).map((row) => row.cells.length),
+          0
+        );
         if (rowCount < 1) {
           return;
         }
-        const tableSpec = this.matchSpecForTable(table, specs, usedIndexes, index, view);
+        const tableSpec = this.matchSpecForTable(
+          table,
+          specs,
+          usedIndexes,
+          index,
+          view
+        );
         const widths = this.getWidthsForTable(table, tableSpec, rowCount);
         this.applyColumnWidthStyles(table, widths);
         this.positionHandles(table);
@@ -1077,7 +1126,11 @@ var TableColumnResizeController = class {
     const previousSpecs = this.fileTableSnapshots.get(filePath) || [];
     const restorations = [];
     for (const currentSpec of currentSpecs) {
-      const previousSpec = previousSpecs.find((item) => item.separatorLineIndex === currentSpec.separatorLineIndex) || previousSpecs.find((item) => item.tableOrdinal === currentSpec.tableOrdinal);
+      const previousSpec = previousSpecs.find(
+        (item) => item.separatorLineIndex === currentSpec.separatorLineIndex
+      ) || previousSpecs.find(
+        (item) => item.tableOrdinal === currentSpec.tableOrdinal
+      );
       if (!previousSpec) {
         continue;
       }
@@ -1085,7 +1138,10 @@ var TableColumnResizeController = class {
       const separatorChanged = previousSpec.rawSeparatorLine !== currentSpec.rawSeparatorLine;
       const sameColumnCount = previousSpec.columns.length === currentSpec.columns.length;
       const columnCountChanged = previousSpec.columns.length !== currentSpec.columns.length;
-      const bodyChanged = !areStringArraysEqual(previousSpec.bodyLines, currentSpec.bodyLines);
+      const bodyChanged = !areStringArraysEqual(
+        previousSpec.bodyLines,
+        currentSpec.bodyLines
+      );
       const reorderedColumns = sameColumnCount ? reorderColumnsByHeader(previousSpec, currentSpec) : null;
       const transferredColumns = headerChanged ? transferColumnsToCurrentLayout(previousSpec, currentSpec) : null;
       if (headerChanged && reorderedColumns) {
@@ -1098,7 +1154,9 @@ var TableColumnResizeController = class {
       if (headerChanged && columnCountChanged && ((transferredColumns == null ? void 0 : transferredColumns.matchedCount) || 0) > 0) {
         restorations.push({
           lineIndex: currentSpec.separatorLineIndex,
-          line: buildSeparatorLineFromColumns((transferredColumns == null ? void 0 : transferredColumns.columns) || [])
+          line: buildSeparatorLineFromColumns(
+            (transferredColumns == null ? void 0 : transferredColumns.columns) || []
+          )
         });
         continue;
       }
@@ -1125,7 +1183,10 @@ var TableColumnResizeController = class {
     });
     const nextMarkdown = editor.getValue();
     this.fileMarkdownSnapshots.set(filePath, nextMarkdown);
-    this.fileTableSnapshots.set(filePath, extractMarkdownTableSpecs(nextMarkdown));
+    this.fileTableSnapshots.set(
+      filePath,
+      extractMarkdownTableSpecs(nextMarkdown)
+    );
     this.scheduleRefresh("editor-change-restoration");
     if ((context == null ? void 0 : context.view) instanceof import_obsidian2.MarkdownView) {
       await this.syncPreviewAfterMarkdownChange(context.view);
@@ -1151,7 +1212,11 @@ var TableColumnResizeController = class {
     }
     this.markInternalChange(filePath);
     if (beforeCursor.endsWith("[")) {
-      editor.replaceRange("[ ] ", { line: cursor.line, ch: cursor.ch - 1 }, cursor);
+      editor.replaceRange(
+        "[ ] ",
+        { line: cursor.line, ch: cursor.ch - 1 },
+        cursor
+      );
     } else {
       editor.replaceRange(" ] ", cursor);
     }
@@ -1186,7 +1251,9 @@ var TableColumnResizeController = class {
         const columnCount2 = getDomTableColumnCount(table);
         let candidates = rangedMatches;
         if (columnCount2 > 0) {
-          const exact = rangedMatches.filter(({ spec }) => spec.headerCells.length === columnCount2);
+          const exact = rangedMatches.filter(
+            ({ spec }) => spec.headerCells.length === columnCount2
+          );
           if (exact.length === 1) {
             usedIndexes.add(exact[0].index);
             return exact[0].spec;
@@ -1213,12 +1280,19 @@ var TableColumnResizeController = class {
       }
     }
     const bodySignature = domTableBodySignature(table);
-    const bodyMatches = matchSpecIndexesByBodySignature(bodySignature, specs, usedIndexes);
+    const bodyMatches = matchSpecIndexesByBodySignature(
+      bodySignature,
+      specs,
+      usedIndexes
+    );
     if (bodyMatches.length === 1) {
       usedIndexes.add(bodyMatches[0]);
       return specs[bodyMatches[0]];
     }
-    const separatorLine = Number.parseInt((_a = table.dataset.markplusSeparatorLine) != null ? _a : "", 10);
+    const separatorLine = Number.parseInt(
+      (_a = table.dataset.markplusSeparatorLine) != null ? _a : "",
+      10
+    );
     if (Number.isInteger(separatorLine) && separatorLine >= 0) {
       const matchedIndex = specs.findIndex(
         (spec, index) => !usedIndexes.has(index) && spec.separatorLineIndex === separatorLine
@@ -1235,7 +1309,9 @@ var TableColumnResizeController = class {
         ({ spec, index }) => !usedIndexes.has(index) && specContentSignature(spec) === contentSignature
       );
       if (columnCount > 0 && contentMatches.length > 1) {
-        const exact = contentMatches.filter(({ spec }) => spec.headerCells.length === columnCount);
+        const exact = contentMatches.filter(
+          ({ spec }) => spec.headerCells.length === columnCount
+        );
         if (exact.length === 1) {
           usedIndexes.add(exact[0].index);
           return exact[0].spec;
@@ -1255,7 +1331,9 @@ var TableColumnResizeController = class {
         ({ spec, index }) => !usedIndexes.has(index) && specHeaderSignature(spec) === headerSignature
       );
       if (columnCount > 0 && headerMatches.length > 1) {
-        const exact = headerMatches.filter(({ spec }) => spec.headerCells.length === columnCount);
+        const exact = headerMatches.filter(
+          ({ spec }) => spec.headerCells.length === columnCount
+        );
         if (exact.length === 1) {
           usedIndexes.add(exact[0].index);
           return exact[0].spec;
@@ -1285,43 +1363,60 @@ var TableColumnResizeController = class {
     return null;
   }
   decorateTable(table, tableSpec, view, tableIndex) {
-    var _a;
     if (!(table instanceof HTMLTableElement)) {
       return;
     }
-    const columnCount = Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+    const columnCount = Math.max(
+      ...Array.from(table.rows).map((row) => row.cells.length),
+      0
+    );
     if (columnCount < 1) {
       return;
     }
-    table.className = table.className.split(/\s+/).filter(
-      (className) => className && !className.startsWith("markplus-table-style-") && !MARKPLUS_TABLE_ALIGNMENT_CLASSES.includes(className)
-    ).join(" ");
-    table.classList.add("markplus-resizable-table");
-    table.dataset.markplusTableIndex = String(tableIndex);
-    table.dataset.markplusTableOrdinal = String((_a = tableSpec == null ? void 0 : tableSpec.tableOrdinal) != null ? _a : tableIndex);
-    if (tableSpec) {
-      table.dataset.markplusSeparatorLine = String(tableSpec.separatorLineIndex);
-    }
     this.applyTableStyleClasses(table);
-    this.applyTableColumnAlignment(table, (tableSpec == null ? void 0 : tableSpec.columns) || []);
+    table.dataset.markplusTableIndex = String(tableIndex);
+    if (!tableSpec) {
+      if (isReadingModeTable(table)) {
+        this.alignPreviewTableWrapper(table);
+      }
+      this.removeResizeHandles(table);
+      return;
+    }
+    if (Number.isInteger(tableSpec.tableOrdinal)) {
+      table.dataset.markplusTableOrdinal = String(tableSpec.tableOrdinal);
+    } else {
+      delete table.dataset.markplusTableOrdinal;
+    }
+    if (Number.isInteger(tableSpec.separatorLineIndex)) {
+      table.dataset.markplusSeparatorLine = String(tableSpec.separatorLineIndex);
+    } else {
+      delete table.dataset.markplusSeparatorLine;
+    }
     const colgroup = this.ensureColgroup(table, columnCount);
     colgroup.dataset.markplusInitialized = "true";
     const widths = this.getWidthsForTable(table, tableSpec, columnCount);
     this.applyWidthsToColgroup(table, colgroup, widths);
+    this.applyTableColumnAlignment(table, tableSpec.columns);
+    if (this.plugin.settings.enableTableFormulas) {
+      applyTableFormulasToDom(table, tableSpec);
+    }
+    if (isReadingModeTable(table)) {
+      this.removeResizeHandles(table);
+      return;
+    }
     this.bindTableHoverTracking(table);
     this.syncHandleCount(table, columnCount, tableSpec, view);
     this.syncScaleHandle(table, tableSpec, view);
     this.syncMenuButton(table, tableSpec, view);
     this.bindTableCellFill(table);
     this.syncActiveFillCell(table, tableSpec, view);
-    if (this.plugin.settings.enableTableFormulas) {
-      applyTableFormulasToDom(table, tableSpec);
-    }
   }
   applyTableStyleClasses(table) {
     const styleVariant = this.plugin.settings.tableStyleVariant || DEFAULT_SETTINGS.tableStyleVariant;
     table.dataset.markplusStyle = styleVariant;
-    table.className = table.className.split(/\s+/).filter((className) => className && !className.startsWith("markplus-table-style-")).join(" ");
+    table.className = table.className.split(/\s+/).filter(
+      (className) => className && !className.startsWith("markplus-table-style-")
+    ).join(" ");
     table.classList.add(`markplus-table-style-${styleVariant}`);
   }
   getWidthsForTable(table, tableSpec, columnCount) {
@@ -1339,7 +1434,9 @@ var TableColumnResizeController = class {
   }
   ensureColgroup(table, columnCount) {
     var _a;
-    let colgroup = table.querySelector(":scope > colgroup.markplus-colgroup");
+    let colgroup = table.querySelector(
+      ":scope > colgroup.markplus-colgroup"
+    );
     if (!colgroup) {
       colgroup = document.createElement("colgroup");
       colgroup.className = "markplus-colgroup";
@@ -1382,7 +1479,14 @@ var TableColumnResizeController = class {
       const handle = document.createElement("div");
       handle.className = "markplus-column-handle";
       handle.addEventListener("pointerdown", (event) => {
-        this.startDragging(event, handle, table, handles.indexOf(handle), tableSpec, view);
+        this.startDragging(
+          event,
+          handle,
+          table,
+          handles.indexOf(handle),
+          tableSpec,
+          view
+        );
       });
       table.appendChild(handle);
       handles.push(handle);
@@ -1465,15 +1569,22 @@ var TableColumnResizeController = class {
     });
     menu.addItem((item) => {
       item.setTitle("\u5220\u9664\u8868\u683C").setIcon("trash").onClick(() => {
-        this.deleteTableFromMarkdown(resolvedView, resolvedSpec, table).catch(() => {
-        });
+        this.deleteTableFromMarkdown(resolvedView, resolvedSpec, table).catch(
+          () => {
+          }
+        );
       });
     });
     menu.addSeparator();
     TABLE_ALIGNMENT_OPTIONS.forEach((option) => {
       menu.addItem((item) => {
         item.setTitle(option.label).setIcon(option.icon).setChecked(alignment === option.value).onClick(() => {
-          this.setTableAlignment(resolvedView, resolvedSpec, table, option.value).catch(() => {
+          this.setTableAlignment(
+            resolvedView,
+            resolvedSpec,
+            table,
+            option.value
+          ).catch(() => {
           });
         });
       });
@@ -1493,7 +1604,10 @@ var TableColumnResizeController = class {
     var _a;
     const editor = view == null ? void 0 : view.editor;
     if (editor && tableSpec && typeof editor.getValue === "function") {
-      const separatorLine = findSeparatorLineForSpec(editor.getValue(), tableSpec);
+      const separatorLine = findSeparatorLineForSpec(
+        editor.getValue(),
+        tableSpec
+      );
       if (separatorLine !== null && typeof editor.getLine === "function") {
         const separator = parseSeparatorLine(editor.getLine(separatorLine));
         if ((_a = separator == null ? void 0 : separator.columns) == null ? void 0 : _a.length) {
@@ -1528,11 +1642,18 @@ var TableColumnResizeController = class {
     this.markInternalChange(view.file.path);
     this.preserveEditorScroll(view, () => {
       const currentLine = editor.getLine(separatorLine);
-      editor.replaceRange(nextLine, { line: separatorLine, ch: 0 }, { line: separatorLine, ch: currentLine.length });
+      editor.replaceRange(
+        nextLine,
+        { line: separatorLine, ch: 0 },
+        { line: separatorLine, ch: currentLine.length }
+      );
     });
     const nextMarkdown = editor.getValue();
     this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-    this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+    this.fileTableSnapshots.set(
+      view.file.path,
+      extractMarkdownTableSpecs(nextMarkdown)
+    );
     const targetTable = table instanceof HTMLTableElement ? table : this.findTableForSpec(view, resolvedSpec);
     if (targetTable) {
       this.applyTableColumnAlignment(targetTable, nextColumns);
@@ -1570,7 +1691,10 @@ var TableColumnResizeController = class {
     }
     for (const row of Array.from(table.rows)) {
       Array.from(row.cells).forEach((cell, index) => {
-        this.setCellAlignmentClass(cell, getColumnAlignmentKind(columns[index]));
+        this.setCellAlignmentClass(
+          cell,
+          getColumnAlignmentKind(columns[index])
+        );
       });
     }
   }
@@ -1593,7 +1717,11 @@ var TableColumnResizeController = class {
   async copyTableToClipboard(view, tableSpec, table) {
     const markdown = getTableMarkdownForCopy(
       view || this.getViewForTable(table),
-      this.resolveTableSpec(table, tableSpec, view || this.getViewForTable(table)),
+      this.resolveTableSpec(
+        table,
+        tableSpec,
+        view || this.getViewForTable(table)
+      ),
       table
     );
     if (!markdown) {
@@ -1628,16 +1756,31 @@ var TableColumnResizeController = class {
       this.markInternalChange(view.file.path);
       const endLineLength = editor.getLine(end).length;
       if (end < lineCount - 1) {
-        editor.replaceRange("", { line: start, ch: 0 }, { line: end + 1, ch: 0 });
+        editor.replaceRange(
+          "",
+          { line: start, ch: 0 },
+          { line: end + 1, ch: 0 }
+        );
       } else if (start > 0) {
         const previousLength = editor.getLine(start - 1).length;
-        editor.replaceRange("", { line: start - 1, ch: previousLength }, { line: end, ch: endLineLength });
+        editor.replaceRange(
+          "",
+          { line: start - 1, ch: previousLength },
+          { line: end, ch: endLineLength }
+        );
       } else {
-        editor.replaceRange("", { line: 0, ch: 0 }, { line: end, ch: endLineLength });
+        editor.replaceRange(
+          "",
+          { line: 0, ch: 0 },
+          { line: end, ch: endLineLength }
+        );
       }
       const nextMarkdown = editor.getValue();
       this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+      this.fileTableSnapshots.set(
+        view.file.path,
+        extractMarkdownTableSpecs(nextMarkdown)
+      );
     });
     this.removeResizeHandles(table);
     await this.syncPreviewAfterMarkdownChange(view);
@@ -1667,7 +1810,9 @@ var TableColumnResizeController = class {
         ))) {
           return;
         }
-        const cell = (_b = event.target) == null ? void 0 : _b.closest("td, th");
+        const cell = (_b = event.target) == null ? void 0 : _b.closest(
+          "td, th"
+        );
         if (!cell || !table.contains(cell)) {
           return;
         }
@@ -1693,7 +1838,13 @@ var TableColumnResizeController = class {
       return fallbackSpec || null;
     }
     const currentSpecs = extractMarkdownTableSpecs(view.editor.getValue());
-    for (const index of [getTableMatchIndex(table), fallbackSpec == null ? void 0 : fallbackSpec.tableOrdinal].filter(
+    if (currentSpecs.length === 1) {
+      return currentSpecs[0];
+    }
+    for (const index of [
+      getTableMatchIndex(table),
+      fallbackSpec == null ? void 0 : fallbackSpec.tableOrdinal
+    ].filter(
       (value) => Number.isInteger(value) && value >= 0
     )) {
       if (index < currentSpecs.length) {
@@ -1703,8 +1854,12 @@ var TableColumnResizeController = class {
     for (const separatorLine of [
       Number.parseInt((_a = table.dataset.markplusSeparatorLine) != null ? _a : "", 10),
       fallbackSpec == null ? void 0 : fallbackSpec.separatorLineIndex
-    ].filter((value) => Number.isInteger(value) && value >= 0)) {
-      const matched = currentSpecs.find((spec) => spec.separatorLineIndex === separatorLine);
+    ].filter(
+      (value) => Number.isInteger(value) && value >= 0
+    )) {
+      const matched = currentSpecs.find(
+        (spec) => spec.separatorLineIndex === separatorLine
+      );
       if (matched) {
         return matched;
       }
@@ -1729,9 +1884,12 @@ var TableColumnResizeController = class {
     if (!handle) {
       handle = document.createElement("div");
       handle.className = "markplus-cell-fill-handle";
-      handle.addEventListener("pointerdown", (event) => {
-        this.startFillDrag(event, table);
-      });
+      handle.addEventListener(
+        "pointerdown",
+        (event) => {
+          this.startFillDrag(event, table);
+        }
+      );
       this.cellFillHandleMap.set(table, handle);
     }
     cell.appendChild(handle);
@@ -1759,7 +1917,11 @@ var TableColumnResizeController = class {
     const resolvedView = view || this.getViewForTable(table);
     this.fillState.cell = sourceCell;
     this.fillState.view = resolvedView;
-    this.fillState.tableSpec = this.resolveTableSpec(table, tableSpec, resolvedView);
+    this.fillState.tableSpec = this.resolveTableSpec(
+      table,
+      tableSpec,
+      resolvedView
+    );
     if (!sourceCell.contains(handle)) {
       sourceCell.appendChild(handle);
     }
@@ -1823,7 +1985,7 @@ var TableColumnResizeController = class {
     if (!this.fillDragState) {
       return;
     }
-    const { table, sourceRow, sourceCol, fillHandle } = this.fillDragState;
+    const { table, sourceRow, sourceCol } = this.fillDragState;
     const targetCell = getTableCellFromPoint(
       table,
       event.clientX,
@@ -1930,55 +2092,19 @@ var TableColumnResizeController = class {
   }
   async applyCellFill(view, tableSpec, sourceRow, sourceCol, sourceText, targets, options = {}) {
     const editor = view == null ? void 0 : view.editor;
-    if (!(view == null ? void 0 : view.file) || !tableSpec || !Array.isArray(targets) || !targets.length) {
+    if (!editor || !(view == null ? void 0 : view.file) || !tableSpec || !Array.isArray(targets) || !targets.length) {
       return;
     }
-    if (editor) {
-      const updates = /* @__PURE__ */ new Map();
-      for (const { rowIndex, colIndex } of targets) {
-        if (rowIndex === sourceRow && colIndex === sourceCol) {
-          continue;
-        }
-        const markdownLineIndex = getMarkdownLineIndexForTableRow(tableSpec, rowIndex);
-        const currentLine = updates.has(markdownLineIndex) ? updates.get(markdownLineIndex) : editor.getLine(markdownLineIndex);
-        const nextValue = getFillCellValue(
-          sourceText,
-          sourceRow,
-          sourceCol,
-          rowIndex,
-          colIndex,
-          options
-        );
-        updates.set(markdownLineIndex, replaceCellInMarkdownRow(currentLine, colIndex, nextValue));
-      }
-      if (!updates.size) {
-        return;
-      }
-      this.markInternalChange(view.file.path);
-      this.preserveEditorScroll(view, () => {
-        [...updates.entries()].sort((a, b) => b[0] - a[0]).forEach(([lineIndex, value]) => {
-          const line = editor.getLine(lineIndex);
-          editor.replaceRange(value, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: line.length });
-        });
-      });
-      const markdown2 = editor.getValue();
-      this.fileMarkdownSnapshots.set(view.file.path, markdown2);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(markdown2));
-      await this.syncPreviewAfterMarkdownChange(view);
-      return;
-    }
-    const markdown = this.fileMarkdownSnapshots.get(view.file.path) || await this.plugin.app.vault.cachedRead(view.file);
-    const lines = markdown.split(/\r?\n/);
-    let hasChanges = false;
+    const updates = /* @__PURE__ */ new Map();
     for (const { rowIndex, colIndex } of targets) {
       if (rowIndex === sourceRow && colIndex === sourceCol) {
         continue;
       }
-      const markdownLineIndex = getMarkdownLineIndexForTableRow(tableSpec, rowIndex);
-      const currentLine = lines[markdownLineIndex];
-      if (typeof currentLine !== "string") {
-        continue;
-      }
+      const markdownLineIndex = getMarkdownLineIndexForTableRow(
+        tableSpec,
+        rowIndex
+      );
+      const currentLine = updates.has(markdownLineIndex) ? updates.get(markdownLineIndex) : editor.getLine(markdownLineIndex);
       const nextValue = getFillCellValue(
         sourceText,
         sourceRow,
@@ -1987,19 +2113,32 @@ var TableColumnResizeController = class {
         colIndex,
         options
       );
-      const nextLine = replaceCellInMarkdownRow(currentLine, colIndex, nextValue);
-      if (nextLine !== currentLine) {
-        lines[markdownLineIndex] = nextLine;
-        hasChanges = true;
-      }
+      updates.set(
+        markdownLineIndex,
+        replaceCellInMarkdownRow(currentLine, colIndex, nextValue)
+      );
     }
-    if (!hasChanges) {
+    if (!updates.size) {
       return;
     }
-    const nextMarkdown = lines.join("\n");
-    await this.plugin.app.vault.modify(view.file, nextMarkdown);
-    this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-    this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+    this.markInternalChange(view.file.path, updates.size);
+    this.preserveEditorScroll(view, () => {
+      [...updates.entries()].sort((a, b) => b[0] - a[0]).forEach(([lineIndex, value]) => {
+        const line = editor.getLine(lineIndex);
+        editor.replaceRange(
+          value,
+          { line: lineIndex, ch: 0 },
+          { line: lineIndex, ch: line.length }
+        );
+      });
+    });
+    const markdown = editor.getValue();
+    this.fileMarkdownSnapshots.set(view.file.path, markdown);
+    this.fileTableSnapshots.set(
+      view.file.path,
+      extractMarkdownTableSpecs(markdown)
+    );
+    await this.syncPreviewAfterMarkdownChange(view);
   }
   positionHandles(table) {
     var _a, _b;
@@ -2142,9 +2281,15 @@ var TableColumnResizeController = class {
     const deltaX = event.clientX - startX;
     const nextWidths = widths.slice();
     if (mode === "scale") {
-      const scale = Math.max(minWidth * widths.length, Math.round((startWidth || 0) + deltaX)) / (startWidth || 1);
+      const scale = Math.max(
+        minWidth * widths.length,
+        Math.round((startWidth || 0) + deltaX)
+      ) / (startWidth || 1);
       for (let index = 0; index < widths.length; index += 1) {
-        nextWidths[index] = Math.max(minWidth, Math.round(widths[index] * scale));
+        nextWidths[index] = Math.max(
+          minWidth,
+          Math.round(widths[index] * scale)
+        );
       }
       return nextWidths;
     }
@@ -2152,7 +2297,10 @@ var TableColumnResizeController = class {
       return nextWidths;
     }
     if (handleIndex === widths.length - 1) {
-      nextWidths[handleIndex] = Math.max(minWidth, Math.round(widths[handleIndex] + deltaX));
+      nextWidths[handleIndex] = Math.max(
+        minWidth,
+        Math.round(widths[handleIndex] + deltaX)
+      );
       return nextWidths;
     }
     const pairWidth = widths[handleIndex] + widths[handleIndex + 1];
@@ -2186,7 +2334,11 @@ var TableColumnResizeController = class {
         resolvedSpec = matchedSpec;
       }
     }
-    await this.writeWidthsBackToMarkdown(this.readCurrentWidths(table), resolvedSpec, view);
+    await this.writeWidthsBackToMarkdown(
+      this.readCurrentWidths(table),
+      resolvedSpec,
+      view
+    );
     this.stopDragging();
     if (view) {
       await this.syncPreviewAfterMarkdownChange(view);
@@ -2221,8 +2373,8 @@ var TableColumnResizeController = class {
     window.removeEventListener("pointerup", this.boundPointerUp);
     window.removeEventListener("pointercancel", this.boundPointerCancel);
   }
-  markInternalChange(filePath) {
-    const budget = (this.internalChangeBudget.get(filePath) || 0) + 1;
+  markInternalChange(filePath, count = 1) {
+    const budget = (this.internalChangeBudget.get(filePath) || 0) + Math.max(1, count);
     this.internalChangeBudget.set(filePath, budget);
   }
   consumeInternalChangeBudget(filePath) {
@@ -2253,7 +2405,10 @@ var TableColumnResizeController = class {
         return widths;
       }
     }
-    return fallbackCount ? Array.from({ length: fallbackCount }, () => this.plugin.settings.minColumnWidth) : [];
+    return fallbackCount ? Array.from(
+      { length: fallbackCount },
+      () => this.plugin.settings.minColumnWidth
+    ) : [];
   }
   applyWidthsToColgroup(table, colgroup, widths) {
     const resolvedWidths = widths && widths.length ? widths : this.readCurrentWidths(table);
@@ -2284,7 +2439,9 @@ var TableColumnResizeController = class {
   }
   preserveEditorScroll(view, action) {
     var _a, _b, _c;
-    const scroller = (_a = view == null ? void 0 : view.contentEl) == null ? void 0 : _a.querySelector(".cm-scroller");
+    const scroller = (_a = view == null ? void 0 : view.contentEl) == null ? void 0 : _a.querySelector(
+      ".cm-scroller"
+    );
     const scrollTop = (_b = scroller == null ? void 0 : scroller.scrollTop) != null ? _b : null;
     const scrollLeft = (_c = scroller == null ? void 0 : scroller.scrollLeft) != null ? _c : null;
     action();
@@ -2303,7 +2460,9 @@ var TableColumnResizeController = class {
   }
   async withPreservedViewScroll(view, action) {
     var _a, _b, _c;
-    const scroller = (_a = view == null ? void 0 : view.contentEl) == null ? void 0 : _a.querySelector(".cm-scroller");
+    const scroller = (_a = view == null ? void 0 : view.contentEl) == null ? void 0 : _a.querySelector(
+      ".cm-scroller"
+    );
     const scrollTop = (_b = scroller == null ? void 0 : scroller.scrollTop) != null ? _b : null;
     const scrollLeft = (_c = scroller == null ? void 0 : scroller.scrollLeft) != null ? _c : null;
     await action();
@@ -2355,14 +2514,20 @@ var TableColumnResizeController = class {
       });
       const nextMarkdown2 = view.editor.getValue();
       this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown2);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown2));
+      this.fileTableSnapshots.set(
+        view.file.path,
+        extractMarkdownTableSpecs(nextMarkdown2)
+      );
       return;
     }
     lines[separatorLineIndex] = separatorLine;
     const nextMarkdown = lines.join("\n");
     await this.plugin.app.vault.modify(view.file, nextMarkdown);
     this.fileMarkdownSnapshots.set(view.file.path, nextMarkdown);
-    this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(nextMarkdown));
+    this.fileTableSnapshots.set(
+      view.file.path,
+      extractMarkdownTableSpecs(nextMarkdown)
+    );
   }
   applyReadingPresentationForPreview(previewMode, _reason = "(unknown)") {
     const containerEl = previewMode == null ? void 0 : previewMode.containerEl;
@@ -2386,7 +2551,9 @@ var TableColumnResizeController = class {
     table.style.marginRight = "0";
     table.style.marginInlineStart = "0";
     table.style.marginInlineEnd = "0";
-    const wrapper = table.closest(".el-table, .table-wrapper");
+    const wrapper = table.closest(
+      ".el-table, .table-wrapper"
+    );
     if (!wrapper) {
       return;
     }
@@ -2413,7 +2580,9 @@ var TableColumnResizeController = class {
   syncReadingPresentation(reason = "(unknown)") {
     window.requestAnimationFrame(() => {
       var _a, _b;
-      for (const leaf of this.plugin.app.workspace.getLeavesOfType("markdown")) {
+      for (const leaf of this.plugin.app.workspace.getLeavesOfType(
+        "markdown"
+      )) {
         const view = leaf.view;
         if (view instanceof import_obsidian2.MarkdownView && ((_a = view.getMode) == null ? void 0 : _a.call(view)) === "preview" && ((_b = view.previewMode) == null ? void 0 : _b.containerEl)) {
           this.applyReadingPresentationForPreview(view.previewMode, reason);
@@ -2429,7 +2598,10 @@ var TableColumnResizeController = class {
     const markdown = (_c = (_b = view.editor) == null ? void 0 : _b.getValue) == null ? void 0 : _c.call(_b);
     if (typeof markdown === "string") {
       this.fileMarkdownSnapshots.set(view.file.path, markdown);
-      this.fileTableSnapshots.set(view.file.path, extractMarkdownTableSpecs(markdown));
+      this.fileTableSnapshots.set(
+        view.file.path,
+        extractMarkdownTableSpecs(markdown)
+      );
     }
     const previewMode = view.previewMode;
     if (!previewMode) {
@@ -2439,7 +2611,10 @@ var TableColumnResizeController = class {
       previewMode.rerender(true);
       return;
     }
-    this.applyReadingPresentationForPreview(previewMode, "sync-markdown-change");
+    this.applyReadingPresentationForPreview(
+      previewMode,
+      "sync-markdown-change"
+    );
   }
   reapplyTableFormulasAfterFill(view, tableSpec) {
     if (!this.plugin.settings.enableTableFormulas || !(view == null ? void 0 : view.contentEl) || !tableSpec) {
@@ -2451,7 +2626,9 @@ var TableColumnResizeController = class {
         return false;
       }
       const specs = extractMarkdownTableSpecs(editor.getValue());
-      const latestSpec = specs.find((spec) => spec.separatorLineIndex === tableSpec.separatorLineIndex) || (Number.isInteger(tableSpec.tableOrdinal) ? specs[tableSpec.tableOrdinal] : null);
+      const latestSpec = specs.find(
+        (spec) => spec.separatorLineIndex === tableSpec.separatorLineIndex
+      ) || (Number.isInteger(tableSpec.tableOrdinal) ? specs[tableSpec.tableOrdinal] : null);
       if (!latestSpec) {
         return false;
       }
@@ -2487,6 +2664,11 @@ var TableColumnResizeController = class {
 };
 function getDomTableColumnCount(table) {
   return Math.max(...Array.from(table.rows).map((row) => row.cells.length), 0);
+}
+function isReadingModeTable(table) {
+  return table instanceof HTMLTableElement && !table.closest(".cm-table-widget, .markdown-source-view") && Boolean(
+    table.closest(".markdown-preview-view, .markdown-reading-view, .el-table")
+  );
 }
 
 // src/main.ts

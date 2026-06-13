@@ -31,7 +31,12 @@ export function getFillCellValue(
   sourceCol: number,
   targetRow: number,
   targetCol: number,
+  options: { disableIncrementFill?: boolean } = {},
 ): string {
+  if (options.disableIncrementFill) {
+    return sourceText;
+  }
+
   const delta =
     Math.abs(targetRow - sourceRow) >= Math.abs(targetCol - sourceCol)
       ? targetRow - sourceRow
@@ -39,7 +44,10 @@ export function getFillCellValue(
   return incrementEmbeddedNumber(sourceText, delta);
 }
 
-export function incrementEmbeddedNumber(sourceText: string, delta: number): string {
+export function incrementEmbeddedNumber(
+  sourceText: string,
+  delta: number,
+): string {
   const token = findFirstNumericToken(sourceText);
   if (!token) {
     return sourceText;
@@ -66,15 +74,36 @@ export function findFirstNumericToken(
 }
 
 export function formatFillNumber(value: number, sourceText: string): string {
-  const decimalMatch = String(sourceText)
-    .trim()
-    .replace(/[,\s¥$€£%]/g, "")
+  const normalizedSource = String(sourceText).trim();
+  const decimalMatch = normalizedSource
+    .replace(/[,\s\u00a5$\u20ac\u00a3%]/g, "")
     .match(/^-?\d+\.(\d+)$/);
 
-  if (!decimalMatch) {
-    return String(Math.round(value));
+  if (decimalMatch) {
+    const decimalLength = decimalMatch[1].length;
+    const precision = 10 ** decimalLength;
+    const roundedValue = Math.round(value * precision) / precision;
+    const integerWidth = getIntegerDigitWidth(normalizedSource);
+    const [integerPart, decimalPart = ""] = Math.abs(roundedValue)
+      .toFixed(decimalLength)
+      .split(".");
+    const paddedInteger =
+      integerWidth > 1 ? integerPart.padStart(integerWidth, "0") : integerPart;
+    return `${roundedValue < 0 ? "-" : ""}${paddedInteger}.${decimalPart}`;
   }
 
-  const precision = 10 ** decimalMatch[1].length;
-  return String(Math.round(value * precision) / precision);
+  const roundedValue = Math.round(value);
+  const integerWidth = getIntegerDigitWidth(normalizedSource);
+  const integerPart = String(Math.abs(roundedValue));
+  const paddedInteger =
+    integerWidth > 1 ? integerPart.padStart(integerWidth, "0") : integerPart;
+  return `${roundedValue < 0 ? "-" : ""}${paddedInteger}`;
+}
+
+export function getIntegerDigitWidth(sourceText: string): number {
+  const match = String(sourceText)
+    .trim()
+    .replace(/[,\s\u00a5$\u20ac\u00a3%]/g, "")
+    .match(/^-?(\d+)(?:\.\d+)?$/);
+  return match ? match[1].length : 0;
 }
